@@ -73,6 +73,24 @@ def stock_basic() -> pd.DataFrame:
     _stock_basic = df
     return df
 
+_fx_obasic = None
+def fx_obasic() -> pd.DataFrame:
+    """
+    Get basic information of all foreign exchange rates.
+
+    Returns:
+    A DataFrame containing foreign exchange basic information.
+    """
+    global _fx_obasic
+    if _fx_obasic is not None:
+        return _fx_obasic
+    df = None
+    df = pro().fx_obasic()
+    if df is None or not isinstance(df, pd.DataFrame):
+        raise RuntimeError("Failed to fetch foreign exchange basic information from Tushare.")
+    _fx_obasic = df
+    return df
+
 global_index_map = {
     'XIN9': '富时中国A50指数',
     'HSI': '恒生指数',
@@ -98,7 +116,7 @@ global_index_map = {
 }
 
 class SYMBOL_SEARCH_RESULT(TypedDict):
-    type: Literal['stock', 'index', 'fund', 'unknown']
+    type: Literal['stock', 'index', 'fund', 'forex', 'unknown']
     symbol: str
     name: str
     source: Literal['tushare', 'choice', 'nanhua', 'efinance']
@@ -160,6 +178,13 @@ def symbol_search_all(
             ret.append({'type': 'index', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
             global _index_basic
             _index_basic = pd.concat([index_basic(), res_df], ignore_index=True)
+
+    if keyword in fx_obasic()['ts_code'].values:
+        res = fx_obasic()[fx_obasic()['ts_code'] == keyword].iloc[0]
+        ret.append({'type': 'forex', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
+    elif keyword in fx_obasic()['name'].values:
+        res = fx_obasic()[fx_obasic()['name'] == keyword].iloc[0]
+        ret.append({'type': 'forex', 'symbol': res['ts_code'], 'name': keyword, 'source': 'tushare'})
     
     res = pro().fund_daily(ts_code=keyword, limit=1)
     assert isinstance(res, pd.DataFrame)
