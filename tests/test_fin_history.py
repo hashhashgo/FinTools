@@ -21,6 +21,8 @@ def test_tushare_history():
     assert len(df_tu)
     df_tu = tu.history("IXIC", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
     assert len(df_tu)
+    df_tu = tu.history("USDCNH.FXCM", type=UnderlyingType.FOREX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
+    assert len(df_tu)
 
 def test_efinance_history():
     ef = DATASOURCES['efinance']()
@@ -54,7 +56,7 @@ def test_nanhua_history():
 
 if __name__ == "__main__":
     # test_investing_history()
-    test_choice_history()
+    # test_choice_history()
     test_tushare_history()
     test_yahoo_finance_history()
     test_nanhua_history()

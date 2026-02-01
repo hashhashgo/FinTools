@@ -99,6 +99,12 @@ class TushareDataSource(OHLCDataSource):
         end_date = self._parse_datetime(end).strftime("%Y%m%d")
         if ts_freq == "daily":
             df = self.__class__.pro.fx_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            df['open'] = (df['bid_open'] + df['ask_open']) / 2
+            df['high'] = (df['bid_high'] + df['ask_high']) / 2
+            df['low'] = (df['bid_low'] + df['ask_low']) / 2
+            df['close'] = (df['bid_close'] + df['ask_close']) / 2
+            df['vol'] = df['tick_qty']
+            df['trade_date'] = pd.to_datetime(df['trade_date']).dt.tz_localize('Asia/Shanghai')
             return df
         else:
             raise NotImplementedError(f"Frequency {freq} not supported for forex data in Tushare")
