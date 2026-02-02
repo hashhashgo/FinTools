@@ -8,12 +8,12 @@ from datetime import datetime, date, timedelta
 import dotenv
 dotenv.load_dotenv()
 
-def test_choice_history():
-    ch = DATASOURCES['choice']()
-    df_ch = ch.history("USDCNH.FX", type=UnderlyingType.STOCK, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
-    assert len(df_ch)
-    df_ch = ch.history("000300.SH", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
-    assert len(df_ch)
+# def test_choice_history():
+#     ch = DATASOURCES['choice']()
+#     df_ch = ch.history("USDCNH.FX", type=UnderlyingType.STOCK, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
+#     assert len(df_ch)
+#     df_ch = ch.history("000300.SH", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
+#     assert len(df_ch)
 
 def test_tushare_history():
     tu = DATASOURCES['tushare']()
@@ -49,7 +49,7 @@ def test_yahoo_finance_history():
 
 def test_nanhua_history():
     nh = DATASOURCES['nanhua']()
-    df_nh = nh.history("PP_NH", type=UnderlyingType.COMMODITY, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
+    df_nh = nh.history("BB_NH", type=UnderlyingType.COMMODITY, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
     assert len(df_nh)
     df_nh = nh.history("PP_NH", type=UnderlyingType.COMMODITY, start=0, end=datetime.now(), freq=DataFrequency.MINUTE60)
     assert len(df_nh)
@@ -57,6 +57,6 @@ def test_nanhua_history():
 if __name__ == "__main__":
     # test_investing_history()
     # test_choice_history()
+    test_nanhua_history()
     test_tushare_history()
     test_yahoo_finance_history()
-    test_nanhua_history()

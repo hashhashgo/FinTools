@@ -1,9 +1,14 @@
 from __future__ import annotations
+from contextlib import contextmanager
 from typing import Dict, Tuple
+import time
 
 from .policy import Policy, DEFAULT_POLICY, SOURCE_ENDPOINT
 from .concurrency import ConcurrencyLimiter
 from .limits_backend import LimitsBackend
+
+import random
+
 
 class RateLimitExceeded(RuntimeError):
     pass
@@ -33,7 +38,7 @@ class RateLimitRegistry:
     def _resolve_endpoint_policy(self, source: str, endpoint: str) -> Policy:
         return self._endpoint_policy.get((source, endpoint), self._resolve_source_policy(source))
 
-    def guard(self, source: str, endpoint: str):
+    def guard(self, source: str, endpoint: str, raise_on_exceed: bool = True, max_wait: float | None = None):
         """
         同时施加：
         1) 源级并发/配额（全方法共享）
@@ -50,17 +55,32 @@ class RateLimitRegistry:
         src_key = f"{source}:{SOURCE_ENDPOINT}"
         ep_key = f"{source}:{endpoint}"
 
-        # 这里用 contextmanager 风格返回一个可用的上下文
-        from contextlib import contextmanager
-
         @contextmanager
         def _ctx():
             with src_conc.acquire():
                 if not self.backend.hit(src_key, src_pol):
-                    raise RateLimitExceeded(f"source rate limit exceeded: {source}")
+                    policy = self._resolve_source_policy(source)
+                    if raise_on_exceed: raise RateLimitExceeded(f"source rate limit exceeded: {source}")
+                    else:
+                        start_wait = time.time()
+                        while not self.backend.hit(src_key, src_pol):
+                            if max_wait is not None and (time.time() - start_wait) >= max_wait:
+                                raise RateLimitExceeded(f"source rate limit exceeded (max_wait={max_wait}s): {source}")
+                            if policy.window == 'second': w = 1
+                            else: w = 60
+                            time.sleep(random.random() * w)
                 with ep_conc.acquire():
                     if not self.backend.hit(ep_key, ep_pol):
-                        raise RateLimitExceeded(f"endpoint rate limit exceeded: {source}.{endpoint}")
+                        policy = self._resolve_endpoint_policy(source, endpoint)
+                        if raise_on_exceed: raise RateLimitExceeded(f"endpoint rate limit exceeded: {source}.{endpoint}")
+                        else:
+                            start_wait = time.time()
+                            while not self.backend.hit(ep_key, ep_pol):
+                                if max_wait is not None and (time.time() - start_wait) >= max_wait:
+                                    raise RateLimitExceeded(f"endpoint rate limit exceeded (max_wait={max_wait}s): {source}.{endpoint}")
+                                if policy.window == 'second': w = 1
+                                else: w = 60
+                                time.sleep(random.random() * w)
                     yield
 
         return _ctx()

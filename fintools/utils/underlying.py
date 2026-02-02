@@ -9,9 +9,6 @@ import tushare
 import efinance as ef
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tenacity import retry, stop_after_attempt, wait_exponential
-import wrapt
-from wrapt.wrappers import ObjectProxy
 
 import importlib
 import logging
@@ -19,23 +16,7 @@ logger = logging.getLogger(__name__)
 
 from .types import parse_datetime
 
-
-class RetryProxy(wrapt.ObjectProxy):
-    def __init__(self, wrapped):
-        super().__init__(wrapped)
-
-    def __getattr__(self, name):
-        attr = cast(ObjectProxy, super()).__getattr__(name)
-        if callable(attr):
-            return retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=0.1, min=0.1, max=2))(attr)
-        else: return attr
-
-_pro: RetryProxy | None = None
-def pro(api_key: str = os.getenv("TUSHARE_API_KEY", "")) -> RetryProxy:
-    global _pro
-    if not _pro:
-        _pro = RetryProxy(tushare.pro_api(api_key))
-    return _pro
+from ..runtime.data_sources.tushare import pro
 
 _index_basic = None
 def index_basic() -> pd.DataFrame:
@@ -49,7 +30,7 @@ def index_basic() -> pd.DataFrame:
     if _index_basic is not None:
         return _index_basic
     df = None
-    df = pro().index_basic()
+    df = pro.index_basic()
     if df is None or not isinstance(df, pd.DataFrame):
         raise RuntimeError("Failed to fetch index basic information from Tushare.")
     _index_basic = df
@@ -67,7 +48,7 @@ def stock_basic() -> pd.DataFrame:
     if _stock_basic is not None:
         return _stock_basic
     df = None
-    df = pro().stock_basic(list_status='L')
+    df = pro.stock_basic(list_status='L')
     if df is None or not isinstance(df, pd.DataFrame):
         raise RuntimeError("Failed to fetch stock basic information from Tushare.")
     _stock_basic = df
@@ -85,7 +66,7 @@ def fx_obasic() -> pd.DataFrame:
     if _fx_obasic is not None:
         return _fx_obasic
     df = None
-    df = pro().fx_obasic()
+    df = pro.fx_obasic()
     if df is None or not isinstance(df, pd.DataFrame):
         raise RuntimeError("Failed to fetch foreign exchange basic information from Tushare.")
     _fx_obasic = df
@@ -147,9 +128,9 @@ def symbol_search_all(
         res = stock_basic()[stock_basic()['name'] == keyword].iloc[0]
         ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': keyword, 'source': 'tushare'})
     else:
-        res_df = pro().stock_basic(ts_code=keyword)
+        res_df = pro.stock_basic(ts_code=keyword)
         assert isinstance(res_df, pd.DataFrame)
-        if res_df.empty: res_df = pro().stock_basic(name=keyword)
+        if res_df.empty: res_df = pro.stock_basic(name=keyword)
         assert isinstance(res_df, pd.DataFrame)
         if not res_df.empty:
             res = res_df.iloc[0]
@@ -169,9 +150,9 @@ def symbol_search_all(
         res = index_basic()[index_basic()['name'] == keyword].iloc[0]
         ret.append({'type': 'index', 'symbol': res['ts_code'], 'name': keyword, 'source': 'tushare'})
     else:
-        res_df = pro().index_basic(ts_code=keyword)
+        res_df = pro.index_basic(ts_code=keyword)
         assert isinstance(res_df, pd.DataFrame)
-        if res_df.empty: res_df = pro().index_basic(name=keyword)
+        if res_df.empty: res_df = pro.index_basic(name=keyword)
         assert isinstance(res_df, pd.DataFrame)
         if not res_df.empty:
             res = res_df.iloc[0]
@@ -186,7 +167,7 @@ def symbol_search_all(
         res = fx_obasic()[fx_obasic()['name'] == keyword].iloc[0]
         ret.append({'type': 'forex', 'symbol': res['ts_code'], 'name': keyword, 'source': 'tushare'})
     
-    res = pro().fund_daily(ts_code=keyword, limit=1)
+    res = pro.fund_daily(ts_code=keyword, limit=1)
     assert isinstance(res, pd.DataFrame)
     if not res.empty:
         res_ts = res.iloc[0]
@@ -280,7 +261,7 @@ def index_components(
     if index_symbol in _index_components_cache:
         return _index_components_cache[index_symbol]
     date = parse_datetime(date).astimezone(ZoneInfo("Asia/Shanghai")).strftime('%Y%m%d')
-    df = pro().index_weight(index_code=index_symbol, end_date=date)
+    df = pro.index_weight(index_code=index_symbol, end_date=date)
     assert isinstance(df, pd.DataFrame)
     trade_date = df['trade_date'].max()
     df = df[df['trade_date'] == trade_date]

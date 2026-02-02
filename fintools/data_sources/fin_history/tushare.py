@@ -6,9 +6,7 @@ import os
 from typing import Optional, Callable, Union
 from datetime import datetime, date
 
-import tushare as ts
-from tushare.pro.client import DataApi
-
+from ...runtime.data_sources.tushare import pro
 
 class TushareDataSource(OHLCDataSource):
 
@@ -26,15 +24,27 @@ class TushareDataSource(OHLCDataSource):
     }
     column_names = ["trade_date", "open", "high", "low", "close", "vol"]
 
-    pro: DataApi
-
-    def __init__(self, token: Optional[str] = None):
-        if token is None and os.getenv('TUSHARE_API_KEY') is not None: token = os.getenv('TUSHARE_API_KEY')
-        if token is not None and (self.__class__.token is None or self.__class__.token != token):
-            self.__class__.token = token
-            self.__class__.pro = ts.pro_api(token=token)
-        assert self.__class__.token is not None, "Tushare API token must be provided either as an argument or through the TUSHARE_API_KEY environment variable"
-        assert self.__class__.pro is not None, "Tushare API client initialization failed"
+    extra_symbols = {
+        "NHCI": "南华综合指数",
+        "NHII": "南华工业品指数",
+        "NHECI": "南华能化指数",
+        "NHMI": "南华金属指数",
+        "NHAI": "南华农产品指数",
+        "NHPMI": "南华贵金属指数",
+        "NHEI": "南华能源指数",
+        "NHPCI": "南华石油化工指数",
+        "NHCCI": "南华煤制化工指数",
+        "NHNFI": "南华有色金属指数",
+        "NHFI": "南华黑色产业指数",
+        "NHFMI": "南华黑色原材料指数",
+        "NHBMI": "南华建材指数",
+        "NHOOI": "南华油脂油料指数",
+        "NHAECI": "南华经济作物指数",
+        "NHNMI": "南华新材料指数",
+        "NHCIMi": "南华迷你综合指数",
+        "NHRECI": "南华风险均衡商品指数",
+        "NHQFII": "南华QFII商品指数"
+    }
 
 
     @history_cache(
@@ -58,15 +68,15 @@ class TushareDataSource(OHLCDataSource):
         start_date = self._parse_datetime(start).strftime("%Y%m%d")
         end_date = self._parse_datetime(end).strftime("%Y%m%d")
         if ts_freq == "daily":
-            df = self.__class__.pro.daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            df = pro.daily(ts_code=symbol, start_date=start_date, end_date=end_date)
         elif ts_freq == "weekly":
-            df = self.__class__.pro.weekly(ts_code=symbol, start_date=start_date, end_date=end_date)
+            df = pro.weekly(ts_code=symbol, start_date=start_date, end_date=end_date)
         elif ts_freq == "monthly":
-            df = self.__class__.pro.monthly(ts_code=symbol, start_date=start_date, end_date=end_date)
+            df = pro.monthly(ts_code=symbol, start_date=start_date, end_date=end_date)
         elif ts_freq in ['1min', '5min', '15min', '30min', '60min']:
             start_date = self._parse_datetime(start).strftime("%Y-%m-%d %H:%M:%S")
             end_date = self._parse_datetime(end).strftime("%Y-%m-%d %H:%M:%S")
-            df = self.__class__.pro.stk_mins(ts_code=symbol, freq=self._map_frequency(freq), start_date=start_date, end_date=end_date)
+            df = pro.stk_mins(ts_code=symbol, freq=self._map_frequency(freq), start_date=start_date, end_date=end_date)
         else:
             raise NotImplementedError(f"Frequency {freq} not supported for stock data in Tushare")
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.tz_localize('Asia/Shanghai')
@@ -78,16 +88,16 @@ class TushareDataSource(OHLCDataSource):
         end_date = self._parse_datetime(end).strftime("%Y%m%d")
         if symbol in ['XIN9', 'HSI', 'HKTECH', 'HKAH', 'DJI', 'SPX', 'IXIC', 'FTSE', 'FCHI', 'GDAXI', 'N225', 'KS11', 'AS51', 'SENSEX', 'IBOVESPA', 'RTS', 'TWII', 'CKLSE', 'SPTSX', 'CSX5P', 'RUT']:
             if ts_freq == "daily":
-                df = self.__class__.pro.index_global(ts_code=symbol, start_date=start_date, end_date=end_date)
+                df = pro.index_global(ts_code=symbol, start_date=start_date, end_date=end_date)
             else:
                 raise NotImplementedError(f"Frequency {freq} not supported for global index data in Tushare")
         else:
             if ts_freq == "daily":
-                df = self.__class__.pro.index_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+                df = pro.index_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
             elif ts_freq == "weekly":
-                df = self.__class__.pro.index_weekly(ts_code=symbol, start_date=start_date, end_date=end_date)
+                df = pro.index_weekly(ts_code=symbol, start_date=start_date, end_date=end_date)
             elif ts_freq == "monthly":
-                df = self.__class__.pro.index_monthly(ts_code=symbol, start_date=start_date, end_date=end_date)
+                df = pro.index_monthly(ts_code=symbol, start_date=start_date, end_date=end_date)
             else:
                 raise NotImplementedError(f"Frequency {freq} not supported for index data in Tushare")
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.tz_localize('Asia/Shanghai')
@@ -98,7 +108,7 @@ class TushareDataSource(OHLCDataSource):
         start_date = self._parse_datetime(start).strftime("%Y%m%d")
         end_date = self._parse_datetime(end).strftime("%Y%m%d")
         if ts_freq == "daily":
-            df = self.__class__.pro.fx_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            df = pro.fx_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
             df['open'] = (df['bid_open'] + df['ask_open']) / 2
             df['high'] = (df['bid_high'] + df['ask_high']) / 2
             df['low'] = (df['bid_low'] + df['ask_low']) / 2
@@ -114,18 +124,18 @@ class TushareDataSource(OHLCDataSource):
         start_date = self._parse_datetime(start).strftime("%Y%m%d")
         end_date = self._parse_datetime(end).strftime("%Y%m%d")
         if ts_freq == "daily":
-            df = self.__class__.pro.fut_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            df = pro.fut_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
             return df
         elif ts_freq == "weekly":
-            df = self.__class__.pro.fut_weekly_monthly(ts_code=symbol, start_date=start_date, end_date=end_date, freq="week")
+            df = pro.fut_weekly_monthly(ts_code=symbol, start_date=start_date, end_date=end_date, freq="week")
             return df
         elif ts_freq == "monthly":
-            df = self.__class__.pro.fut_weekly_monthly(ts_code=symbol, start_date=start_date, end_date=end_date, freq="month")
+            df = pro.fut_weekly_monthly(ts_code=symbol, start_date=start_date, end_date=end_date, freq="month")
             return df
         elif ts_freq in ['1min', '5min', '15min', '30min', '60min']:
             start_date = self._parse_datetime(start).strftime("%Y-%m-%d %H:%M:%S")
             end_date = self._parse_datetime(end).strftime("%Y-%m-%d %H:%M:%S")
-            df = self.__class__.pro.fut_mins(ts_code=symbol, freq=self._map_frequency(freq), start_date=start_date, end_date=end_date)
+            df = pro.fut_mins(ts_code=symbol, freq=self._map_frequency(freq), start_date=start_date, end_date=end_date)
             return df
         else:
             raise NotImplementedError(f"Frequency {freq} not supported for commodity data in Tushare")
@@ -135,11 +145,11 @@ class TushareDataSource(OHLCDataSource):
         start_date = self._parse_datetime(start).strftime("%Y%m%d")
         end_date = self._parse_datetime(end).strftime("%Y%m%d")
         if ts_freq == "daily":
-            df = self.__class__.pro.fund_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            df = pro.fund_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
         elif ts_freq in ['1min', '5min', '15min', '30min', '60min']:
             start_date = self._parse_datetime(start).strftime("%Y-%m-%d %H:%M:%S")
             end_date = self._parse_datetime(end).strftime("%Y-%m-%d %H:%M:%S")
-            df = self.__class__.pro.stk_mins(ts_code=symbol, freq=self._map_frequency(freq), start_date=start_date, end_date=end_date)
+            df = pro.stk_mins(ts_code=symbol, freq=self._map_frequency(freq), start_date=start_date, end_date=end_date)
         else:
             raise NotImplementedError(f"Frequency {freq} not supported for ETF data in Tushare")
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.tz_localize('Asia/Shanghai')
