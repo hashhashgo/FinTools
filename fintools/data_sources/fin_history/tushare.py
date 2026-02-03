@@ -1,10 +1,11 @@
 from .base import OHLCDataSource, UnderlyingType, DataFrequency
 from fintools.databases.history_db import history_cache
 import pandas as pd
-import sqlite3
 import os
 from typing import Optional, Callable, Union
 from datetime import datetime, date
+from importlib.resources import files
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ...runtime.data_sources.tushare import pro
 
@@ -25,27 +26,28 @@ class TushareDataSource(OHLCDataSource):
     column_names = ["trade_date", "open", "high", "low", "close", "vol"]
 
     extra_symbols = {
-        "NHCI": "南华综合指数",
-        "NHII": "南华工业品指数",
-        "NHECI": "南华能化指数",
-        "NHMI": "南华金属指数",
-        "NHAI": "南华农产品指数",
-        "NHPMI": "南华贵金属指数",
-        "NHEI": "南华能源指数",
-        "NHPCI": "南华石油化工指数",
-        "NHCCI": "南华煤制化工指数",
-        "NHNFI": "南华有色金属指数",
-        "NHFI": "南华黑色产业指数",
-        "NHFMI": "南华黑色原材料指数",
-        "NHBMI": "南华建材指数",
-        "NHOOI": "南华油脂油料指数",
-        "NHAECI": "南华经济作物指数",
-        "NHNMI": "南华新材料指数",
-        "NHCIMi": "南华迷你综合指数",
-        "NHRECI": "南华风险均衡商品指数",
-        "NHQFII": "南华QFII商品指数"
+        'NHCI': '南华商品指数',
+        'NHII': '南华工业品指数',
+        'NHECI': '南华能化指数',
+        'NHMI': '南华金属指数',
+        'NHAI': '南华农产品指数',
+        'NHPMI': '南华贵金属指数',
+        'NHEI': '南华能源指数',
+        'NHPCI': '南华石油化工指数',
+        'NHCCI': '南华煤制化工指数',
+        'NHNFI': '南华有色金属指数',
+        'NHFI': '南华黑色指数',
+        'NHFMI': '南华黑色原材料指数',
+        'NHBMI': '南华建材指数',
+        'NHOOI': '南华油脂油料指数',
+        'NHAECI': '南华经济作物指数',
+        'NHNMI': '南华新材料指数',
+        'NHCIMi': '南华迷你综合指数',
+        'NHRECI': '南华风险均衡商品指数',
+        'NHQFII': '南华QFII商品指数'
     }
 
+    nanhua_weights = pd.read_csv(files("fintools").joinpath("data/nanhua_weights.csv").open(encoding="utf-8"))
 
     @history_cache(
         table_basename=name,
@@ -56,7 +58,10 @@ class TushareDataSource(OHLCDataSource):
         missing_threshold=0
     )
     def history(self, symbol: str, type: UnderlyingType, start: Union[str, datetime, date, int] = 0, end: Union[str, datetime, date, int] = datetime.now(), freq: DataFrequency = DataFrequency.DAILY) -> pd.DataFrame:
-        if type == UnderlyingType.STOCK: return self._format_dataframe(self._history_stock(symbol, start, end, freq))
+        if symbol in self.extra_symbols:
+            assert type == UnderlyingType.INDEX, "Extra symbols are only supported for index type"
+            return self._format_dataframe(self._history_nanhua_index(symbol, start, end, freq))
+        elif type == UnderlyingType.STOCK: return self._format_dataframe(self._history_stock(symbol, start, end, freq))
         elif type == UnderlyingType.INDEX: return self._format_dataframe(self._history_index(symbol, start, end, freq))
         elif type == UnderlyingType.FOREX: return self._format_dataframe(self._history_forex(symbol, start, end, freq))
         elif type == UnderlyingType.COMMODITY: return self._format_dataframe(self._history_commodity(symbol, start, end, freq))
@@ -154,6 +159,37 @@ class TushareDataSource(OHLCDataSource):
             raise NotImplementedError(f"Frequency {freq} not supported for ETF data in Tushare")
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.tz_localize('Asia/Shanghai')
         return df
+    
+    def _history_nanhua_index(self, symbol: str, start: Union[str, datetime, date, int], end: Union[str, datetime, date, int], freq: DataFrequency) -> pd.DataFrame:
+        def fetch_component_data(symbol):
+            df_comp = self._history_index(symbol=symbol, start=0, end=end, freq=freq)
+            return df_comp
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(fetch_component_data, s + '.NH'): s + '.NH' for s in self.nanhua_weights[self.nanhua_weights['index'] == symbol]['symbol'].unique()}
+            df_list = []
+            for future in as_completed(futures):
+                res = future.result()
+                if not res.empty: df_list.append(res)
+        df_all = pd.concat(df_list).rename(columns={'ts_code': 'symbol', 'trade_date': 'date'})
+        df_all['symbol'] = df_all['symbol'].str.replace('.NH', '', regex=False)
+        df_list = []
+        wall = self.nanhua_weights[self.nanhua_weights['index'] == symbol]
+        for year in wall['year'].unique():
+            df = df_all[(df_all['date'] >= pd.to_datetime(f"{year}-06-01").tz_localize('Asia/Shanghai')) & (df_all['date'] < pd.to_datetime(f"{year + 1}-06-01").tz_localize('Asia/Shanghai'))]
+            df_list.append(df.merge(wall[wall['year'] == year], on='symbol'))
+        df_all = pd.concat(df_list)[['date', 'symbol', 'index', 'pct_chg', 'weight']]
+        df_all['weighted_return'] = df_all['pct_chg'] * df_all['weight']
+        df_index = df_all.groupby(['date', 'index']).agg(index_return = ('weighted_return', 'sum')).reset_index()
+        df_index['index_return'] = df_index['index_return'] + 1
+        df_index = df_index.sort_values(['index', 'date'])
+        df_index['close'] = df_index.groupby(['index'])['index_return'].cumprod() * 1000
+        df_index['open'] = df_index.groupby(['index'])['close'].shift(1)
+        df_index['open'] = df_index['open'].fillna(1000)
+        df_index['high'] = df_index[['open', 'close']].max(axis=1)
+        df_index['low'] = df_index[['open', 'close']].min(axis=1)
+        df_index['vol'] = 0
+        df_index = df_index[['date', 'open', 'high', 'low', 'close', 'vol']]
+        return df_index
 
     def subscribe(self, symbol: str, interval: str, callback: Callable) -> None:
         # Tushare does not support real-time data subscription

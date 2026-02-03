@@ -17,6 +17,8 @@ dotenv.load_dotenv()
 
 def test_tushare_history():
     tu = DATASOURCES['tushare']()
+    df_tu = tu.history("NHECI", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
+    assert len(df_tu)
     df_tu = tu.history("600519.SH", type=UnderlyingType.STOCK, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
     assert len(df_tu)
     df_tu = tu.history("IXIC", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
@@ -57,6 +59,6 @@ def test_nanhua_history():
 if __name__ == "__main__":
     # test_investing_history()
     # test_choice_history()
-    test_nanhua_history()
     test_tushare_history()
+    test_nanhua_history()
     test_yahoo_finance_history()

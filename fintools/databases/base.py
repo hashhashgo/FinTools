@@ -1,16 +1,17 @@
 import sqlite3
 from hashlib import sha1
 from contextlib import contextmanager
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Tuple
 from datetime import datetime, date, timedelta
 from pyparsing import ABC, abstractmethod
+import pandas as pd
 
 from contextvars import ContextVar
 
-from .utils import _python_value_to_sqlite_value
+from .utils import _python_value_to_sqlite_value, _sqlite_value_to_pandas_value
 
 
-Fields = Dict[str, int | str | datetime | float | bool]
+Fields = Dict[str, Any]
 
 class BaseDB(ABC):
 
@@ -20,6 +21,42 @@ class BaseDB(ABC):
         "connection", default=None
     )
     tables: Dict[str, Any] = {}
+
+    def get_table_name_and_cursor(self, common_fields: Fields = {}) -> Tuple[str, sqlite3.Cursor]:
+        table_name = self._get_table_name(common_fields=common_fields)
+        
+        if not self.tables.get(table_name): self.tables[table_name] = self._get_table_info(common_fields=common_fields)
+        if not self.tables.get(table_name):
+            raise ValueError(f"表 {table_name} 不存在，请先创建。")
+        
+        cur = self._get_cursor()
+        return table_name, cur
+    
+    def format_dataframe(self, data: List[Any] | pd.DataFrame, common_fields: Fields = {}) -> pd.DataFrame:
+        """
+        将数据格式化为 DataFrame。
+
+        参数：
+            data: 待格式化的数据，可以是列表或 DataFrame。
+            common_fields: 公共字段，如 freq 等，common_fields 作为表名的一部分
+        返回值：
+            格式化后的 DataFrame。
+        """
+        table_name = self._get_table_name(common_fields=common_fields)
+        
+        if not self.tables.get(table_name): self.tables[table_name] = self._get_table_info(common_fields=common_fields)
+        if not self.tables.get(table_name):
+            raise ValueError(f"表 {table_name} 不存在，请先创建。")
+        
+        if isinstance(data, pd.DataFrame):
+            df = data
+        else:
+            df = pd.DataFrame(data, columns=data[0].keys() if data else [])
+
+        if not df.empty:
+            return _sqlite_value_to_pandas_value(df, type_dict=self.tables[table_name])
+        else:
+            return df
 
     def list_all_cached(self, common_fields: Fields = {}) -> List[Any]:
         """

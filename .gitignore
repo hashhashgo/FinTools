@@ -4,6 +4,7 @@ agent_tools_service_ports.json
 *.db
 *.db-shm
 *.db-wal
+*.parquet
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
