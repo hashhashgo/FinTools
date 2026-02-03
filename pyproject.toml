@@ -27,6 +27,10 @@ dependencies = [
 [tool.setuptools]
 include-package-data = true
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fintools*"]
+
 [tool.setuptools.package-data]
 fintools = ["data/**/*"]
 
