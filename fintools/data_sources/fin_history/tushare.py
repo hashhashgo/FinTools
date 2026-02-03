@@ -47,7 +47,7 @@ class TushareDataSource(OHLCDataSource):
         'NHQFII': '南华QFII商品指数'
     }
 
-    nanhua_weights = pd.read_csv(files("fintools").joinpath("data/nanhua_weights.csv").open(encoding="utf-8"))
+    nanhua_weights = pd.read_csv(str(files("fintools").joinpath("data/nanhua_weights.csv")), encoding="utf-8")
 
     @history_cache(
         table_basename=name,
