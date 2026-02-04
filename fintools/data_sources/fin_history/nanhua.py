@@ -5,6 +5,7 @@ import sqlite3
 import os
 from typing import Optional, Callable, Union
 from datetime import datetime, date, timedelta
+from importlib.resources import files
 
 import requests
 
@@ -26,6 +27,9 @@ class NanHuaDataSource(OHLCDataSource):
     }
     column_names = ["date", "open", "high", "low", "close", "volume"]
 
+    extra_symbols = {
+        'TL_NH': 'CBA21801.CS',
+    }
 
     def __init__(self, data_server_url: str = os.getenv("NANHUA_SERVER_URL", "http://localhost:13200/")):
         if not data_server_url.endswith('/'):
@@ -41,12 +45,33 @@ class NanHuaDataSource(OHLCDataSource):
         except_fields=("type", ),
     )
     def history(self, symbol: str, type: UnderlyingType = UnderlyingType.INDEX, start: Union[str, datetime, date, int] = 0, end: Union[str, datetime, date, int] = datetime.now(), freq: DataFrequency = DataFrequency.DAILY) -> pd.DataFrame:
+        assert type == UnderlyingType.INDEX, "NanHuaDataSource only supports UnderlyingType.INDEX"
         nh_freq = self._map_frequency(freq)
         data_raw = requests.get(f'{self.data_server_url}?ticker={symbol}&freq={nh_freq}').json()
         df = pd.DataFrame(data_raw)
         df["date"] = pd.to_datetime(df['quoteTime'], unit='ms', utc=True)
+        df = df.rename(columns={
+            "turnOver": "amount",
+        })
+
         start_date = self._parse_datetime(start)
         end_date = self._parse_datetime(end)
+
+        if symbol in self.extra_symbols:
+            assert freq == DataFrequency.DAILY, "Only daily frequency is supported for extra symbols"
+            earliest = df.loc[df['date'].idxmin()]
+            assert isinstance(earliest, pd.Series)
+            if start_date < earliest['date']:
+                earliest_date = earliest['date'].date()
+                earliest_close = earliest['close']
+                df_pre = pd.read_csv(str(files("fintools").joinpath(f"data/daily_{self.extra_symbols[symbol]}.csv")), encoding="utf-8")
+                df_pre['date'] = pd.to_datetime(df_pre['date'], utc=True).dt.date
+                ratio = earliest_close / df_pre[df_pre["date"] == earliest_date]["close"].values[0]
+                df_pre[['open', 'high', 'low', 'close']] = df_pre[['open', 'high', 'low', 'close']] * ratio
+                df_pre = df_pre[df_pre['date'] < earliest_date]
+                df_pre['date'] = pd.to_datetime(df_pre['date'], utc=True)
+                df = pd.concat([df_pre, df], ignore_index=True)
+
         if start_date.time() == datetime.min.time() and end_date.time() == datetime.min.time():
             end_date = end_date + self._datetime_shift_base(freq)
         df = pd.DataFrame(df[(df["date"] >= start_date) & (df["date"] <= end_date)])

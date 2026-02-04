@@ -51,9 +51,11 @@ def test_yahoo_finance_history():
 
 def test_nanhua_history():
     nh = DATASOURCES['nanhua']()
-    df_nh = nh.history("BB_NH", type=UnderlyingType.COMMODITY, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
+    df_nh = nh.history("TL_NH", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
     assert len(df_nh)
-    df_nh = nh.history("PP_NH", type=UnderlyingType.COMMODITY, start=0, end=datetime.now(), freq=DataFrequency.MINUTE60)
+    df_nh = nh.history("BB_NH", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
+    assert len(df_nh)
+    df_nh = nh.history("PP_NH", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.MINUTE60)
     assert len(df_nh)
 
 if __name__ == "__main__":
