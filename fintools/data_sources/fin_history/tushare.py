@@ -165,8 +165,8 @@ class TushareDataSource(OHLCDataSource):
         if "NH" in symbol:
             return self._history_extra_nanhua_index(symbol, start, end, freq)
         file_path = files("fintools").joinpath(f"data/{freq.value}_{symbol}.csv")
-        with file_path.open() as f:
-            df_pre = pd.read_csv(f, encoding="utf-8")
+        with file_path.open(encoding="utf-8") as f:
+            df_pre = pd.read_csv(f)
         df = self._history_index(symbol=symbol, start=0, end=end, freq=freq)
         start_date = self._parse_datetime(start)
         end_date = self._parse_datetime(end)
