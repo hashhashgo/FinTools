@@ -30,12 +30,16 @@ def index_basic() -> pd.DataFrame:
     if _index_basic is not None:
         return _index_basic
     df = None
-    df = pro.index_basic()
-    if df is None or not isinstance(df, pd.DataFrame):
-        raise RuntimeError("Failed to fetch index basic information from Tushare.")
-    _index_basic = df
-    return df
-
+    df_list = []
+    offset = 0
+    while True:
+        df = pro.index_basic(offset=offset)
+        if df.empty:
+            break
+        df_list.append(df)
+        offset += len(df)
+    _index_basic = pd.concat(df_list, ignore_index=True)
+    return _index_basic
 _stock_basic = None
 def stock_basic() -> pd.DataFrame:
     """

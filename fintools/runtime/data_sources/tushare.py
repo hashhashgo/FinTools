@@ -40,6 +40,12 @@ GLOBAL_REGISTRY.set_endpoint_policy("tushare", "daily", Policy(
     window="minute"
 ))
 
+GLOBAL_REGISTRY.set_endpoint_policy("tushare", "daily_basic", Policy(
+    max_concurrency=5000,
+    max_calls=700,
+    window="minute"
+))
+
 # pro = RetryProxy(tushare.pro_api(os.getenv("TUSHARE_API_KEY", "")), attempts=5)
 pro = ClientProxy(
     client = RetryProxy(tushare.pro_api(os.getenv("TUSHARE_API_KEY", "")), attempts=5),
