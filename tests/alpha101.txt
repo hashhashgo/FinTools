@@ -87,3 +87,7 @@ rank(((1 - rank((ts_stddev(returns, 2) / ts_stddev(returns, 5)))) + (1 - rank(ts
 (max(rank(ts_decay_linear(ts_delta(((close * 0.369701) + (vwap * (1 - 0.369701))), 2), 3)), ts_rank(ts_decay_linear(abs(ts_corr(group_neutralize(ts_mean(amount, 81), "industry"), close, 13)), 5), 14)) * -1)
 (min(rank(ts_decay_linear(((rank(open) + rank(low)) - (rank(high) + rank(close))), 8)), ts_rank(ts_decay_linear(ts_corr(ts_rank(close, 8), ts_rank(ts_mean(amount, 60), 21), 8), 7), 3)))
 (ts_rank(ts_decay_linear(ts_corr(((low * 0.967285) + (low * (1 - 0.967285))), ts_mean(amount, 10), 7), 6), 4) - ts_rank(ts_decay_linear(ts_delta(group_neutralize(vwap, "industry"), 3), 10), 15))
+((rank((close - ts_max(close, 5))) ** ts_rank(ts_corr(group_neutralize(ts_mean(amount, 40), "subindustry"), low, 5), 3)) * -1)
+((ts_rank(ts_decay_linear(ts_decay_linear(ts_corr(group_neutralize(close, "industry"), volume, 10), 16), 4), 5) - rank(ts_decay_linear(ts_corr(vwap, ts_mean(amount, 30), 4), 3))) * -1)
+(min(ts_rank(ts_decay_linear(((((high + low) / 2) + close) < (low + open)), 15), 19), ts_rank(ts_decay_linear(ts_corr(rank(low), rank(ts_mean(amount, 30)), 8), 7), 7)))
+(ts_rank(ts_decay_linear(ts_corr(group_neutralize(vwap, "industry"), ts_mean(amount, 81), 17), 20), 8) / rank(ts_decay_linear(ts_delta(((close * 0.524434) + (vwap * (1 - 0.524434))), 3), 16)))

@@ -25,7 +25,7 @@ class TushareDataSource(OHLCDataSource):
     }
     column_names = ["trade_date", "open", "high", "low", "close", "vol"]
 
-    extra_symbols = {
+    extra_index = {
         'NHCI': '南华商品指数',
         'NHII': '南华工业品指数',
         'NHECI': '南华能化指数',
@@ -59,7 +59,7 @@ class TushareDataSource(OHLCDataSource):
         missing_threshold=0
     )
     def history(self, symbol: str, type: UnderlyingType, start: Union[str, datetime, date, int] = 0, end: Union[str, datetime, date, int] = datetime.now(), freq: DataFrequency = DataFrequency.DAILY) -> pd.DataFrame:
-        if symbol in self.extra_symbols:
+        if symbol in self.extra_index:
             assert type == UnderlyingType.INDEX, "Extra symbols are only supported for index type"
             return self._format_dataframe(self._history_extra_index(symbol, start, end, freq))
         elif type == UnderlyingType.STOCK: return self._format_dataframe(self._history_stock(symbol, start, end, freq))

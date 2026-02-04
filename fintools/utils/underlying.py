@@ -148,10 +148,10 @@ def symbol_search_all(
         if keyword in global_index_map.values():
             keyword = [k for k, v in global_index_map.items() if v == keyword][0]
         ret.append({'type': 'index', 'symbol': keyword, 'name': global_index_map[keyword], 'source': 'tushare'})
-    elif keyword and keyword in TushareDataSource.extra_symbols:
-        ret.append({'type': 'index', 'symbol': keyword, 'name': TushareDataSource.extra_symbols[keyword], 'source': 'tushare'})
-    elif keyword and keyword in TushareDataSource.extra_symbols.values():
-        symbol = [k for k, v in TushareDataSource.extra_symbols.items() if v == keyword][0]
+    elif keyword and keyword in TushareDataSource.extra_index:
+        ret.append({'type': 'index', 'symbol': keyword, 'name': TushareDataSource.extra_index[keyword], 'source': 'tushare'})
+    elif keyword and keyword in TushareDataSource.extra_index.values():
+        symbol = [k for k, v in TushareDataSource.extra_index.items() if v == keyword][0]
         ret.append({'type': 'index', 'symbol': symbol, 'name': keyword, 'source': 'tushare'})
     elif keyword and keyword in index_basic()['ts_code'].values:
         res = index_basic()[index_basic()['ts_code'] == keyword].iloc[0]
