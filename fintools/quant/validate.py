@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json, hashlib
-from typing import Tuple
+from typing import cast
 from .AST import Node, Field, Const, Call
 from .registry import OPS, FIELDS, ValidationError
 
@@ -33,7 +33,7 @@ def _require_int_const(node: Node, what: str) -> int:
         raise ValidationError(f"{what} must be an integer constant")
     return int(v)
 
-def validate(node: Node, depth = 0) -> int:
+def validate(node: Node, depth = 0, allow_float_for_int=False) -> int:
     total_nodes = 1
     if depth > MAX_DEPTH:
         raise ValidationError(f"Expression is too deep: {depth} (max {MAX_DEPTH})")
@@ -48,7 +48,10 @@ def validate(node: Node, depth = 0) -> int:
                 if total_nodes > MAX_NODES:
                     raise ValidationError(f"Expression has too many nodes: {total_nodes} (max {MAX_NODES})")
             elif dtype == int:
-                _require_int_const(node.args[i], f"{i}-th argument of '{node.fn}'")
+                if not allow_float_for_int: _require_int_const(node.args[i], f"{i}-th argument of '{node.fn}'")
+                arg = node.args[i]
+                if not isinstance(arg, Const) or not isinstance(arg.value, (float, int)):
+                    raise ValidationError(f"{i}-th argument of '{node.fn}' must be a numeric constant")
             elif dtype == float:
                 arg = node.args[i]
                 if not isinstance(arg, Const) or not isinstance(arg.value, (float)):
