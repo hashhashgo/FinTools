@@ -47,7 +47,7 @@ def test_compile_expression(pre_hash: list[str] = [], raise_if_error=True):
                 if raise_if_error:
                     raise pe
                 else:
-                    print(f"ParserError compiling expression #{i}:")
+                    print(f"ParserError compiling expression #{i + 1}:")
                     print(pe.pretty())
                     print("\n")
                 
@@ -55,7 +55,7 @@ def test_compile_expression(pre_hash: list[str] = [], raise_if_error=True):
                 if raise_if_error:
                     raise ve
                 else:
-                    print(f"ValidationError compiling expression #{i}: {ve}")
+                    print(f"ValidationError compiling expression #{i + 1}: {ve}")
 
             except Exception as e:
                 raise e

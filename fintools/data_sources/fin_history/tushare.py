@@ -44,7 +44,8 @@ class TushareDataSource(OHLCDataSource):
         'NHNMI': '南华新材料指数',
         'NHCIMi': '南华迷你综合指数',
         'NHRECI': '南华风险均衡商品指数',
-        'NHQFII': '南华QFII商品指数'
+        'NHQFII': '南华QFII商品指数',
+        "980080.CNI": "成长100"
     }
 
     nanhua_weights = pd.read_csv(str(files("fintools").joinpath("data/nanhua_weights.csv")), encoding="utf-8")
@@ -60,7 +61,7 @@ class TushareDataSource(OHLCDataSource):
     def history(self, symbol: str, type: UnderlyingType, start: Union[str, datetime, date, int] = 0, end: Union[str, datetime, date, int] = datetime.now(), freq: DataFrequency = DataFrequency.DAILY) -> pd.DataFrame:
         if symbol in self.extra_symbols:
             assert type == UnderlyingType.INDEX, "Extra symbols are only supported for index type"
-            return self._format_dataframe(self._history_nanhua_index(symbol, start, end, freq))
+            return self._format_dataframe(self._history_extra_index(symbol, start, end, freq))
         elif type == UnderlyingType.STOCK: return self._format_dataframe(self._history_stock(symbol, start, end, freq))
         elif type == UnderlyingType.INDEX: return self._format_dataframe(self._history_index(symbol, start, end, freq))
         elif type == UnderlyingType.FOREX: return self._format_dataframe(self._history_forex(symbol, start, end, freq))
@@ -160,7 +161,23 @@ class TushareDataSource(OHLCDataSource):
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.tz_localize('Asia/Shanghai')
         return df
     
-    def _history_nanhua_index(self, symbol: str, start: Union[str, datetime, date, int], end: Union[str, datetime, date, int], freq: DataFrequency) -> pd.DataFrame:
+    def _history_extra_index(self, symbol: str, start: Union[str, datetime, date, int], end: Union[str, datetime, date, int], freq: DataFrequency) -> pd.DataFrame:
+        if "NH" in symbol:
+            return self._history_extra_nanhua_index(symbol, start, end, freq)
+        file_path = files("fintools").joinpath(f"data/{freq.value}_{symbol}.csv")
+        with file_path.open() as f:
+            df_pre = pd.read_csv(f, encoding="utf-8")
+        df = self._history_index(symbol=symbol, start=0, end=end, freq=freq)
+        start_date = self._parse_datetime(start)
+        end_date = self._parse_datetime(end)
+        if start_date > df['trade_date'].min(): return df[df['trade_date'] >= pd.to_datetime(start_date)]
+        df_pre['trade_date'] = pd.to_datetime(df_pre['date']).dt.tz_localize('Asia/Shanghai')
+        df_pre.drop(columns=['date'], inplace=True)
+        df_pre = df_pre[df_pre['trade_date'] < df['trade_date'].min()]
+        df_combined = pd.concat([df_pre, df], ignore_index=True)
+        return df_combined[(df_combined['trade_date'] <= pd.to_datetime(end_date)) & (df_combined['trade_date'] >= pd.to_datetime(start_date))]
+    
+    def _history_extra_nanhua_index(self, symbol: str, start: Union[str, datetime, date, int], end: Union[str, datetime, date, int], freq: DataFrequency) -> pd.DataFrame:
         def fetch_component_data(symbol):
             df_comp = self._history_index(symbol=symbol, start=0, end=end, freq=freq)
             return df_comp

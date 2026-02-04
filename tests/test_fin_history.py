@@ -17,6 +17,8 @@ dotenv.load_dotenv()
 
 def test_tushare_history():
     tu = DATASOURCES['tushare']()
+    df_tu = tu.history("980080.CNI", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
+    assert len(df_tu)
     df_tu = tu.history("NHECI", type=UnderlyingType.INDEX, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
     assert len(df_tu)
     df_tu = tu.history("600519.SH", type=UnderlyingType.STOCK, start=0, end=datetime.now(), freq=DataFrequency.DAILY)
