@@ -29,6 +29,7 @@ class NanHuaDataSource(OHLCDataSource):
 
     extra_symbols = {
         'TL_NH': 'CBA21801.CS',
+        'T_NH': 'CBA04501.CS',
     }
 
     def __init__(self, data_server_url: str = os.getenv("NANHUA_SERVER_URL", "http://localhost:13200/")):

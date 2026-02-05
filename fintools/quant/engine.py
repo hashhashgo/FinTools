@@ -1,3 +1,4 @@
+import polars as pl
 from .parser import Parser
 from .validate import normalize, validate, ast_to_hash
 
