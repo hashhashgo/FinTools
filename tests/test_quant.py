@@ -67,7 +67,7 @@ if __name__ == "__main__":
     import os
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
-    # test_fetch_everything()
+    test_fetch_everything()
     # test_compile_expression(raise_if_error=False)
     # print("All tests passed.")
     observer = Observer()

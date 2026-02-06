@@ -23,8 +23,6 @@ class RetryProxy(wrapt.ObjectProxy):
             return retry(stop=self.__stop__, wait=self.__wait__)(attr)
         else: return attr
 
-import dotenv
-dotenv.load_dotenv()
 import os
 import tushare
 
