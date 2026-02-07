@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ast import expr
 from dataclasses import dataclass
 from typing import Callable, Dict, Tuple, List, cast, get_type_hints, get_args, get_origin, Annotated
 import inspect
@@ -8,9 +9,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 import polars as pl
+from scipy import stats
 from .AST import Node, Const, Call
 
 class ValidationError(Exception): pass
+
+DATE_COL = "date"
+SYMBOL_COL = "symbol"
+
+FIELDS = {'symbol', 'date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'returns', 'vwap', 'cap', 'industry'}
+GROUP_FIELDS = {'industry'}
 
 class LLMHidden: pass
 
@@ -28,7 +36,7 @@ class OpSpec:
 
 OPS: Dict[str, OpSpec] = {}
 
-def quant_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
+def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
     sig = inspect.signature(func)
     name = func.__name__.strip('_')
     params = sig.parameters
@@ -64,8 +72,11 @@ def quant_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
                 else:
                     raise ValidationError(f"Missing required argument '{p.name}' for function '{name}'")
             else:
-                if field_type[i] != object and type(args_list[i]) != field_type[i]:
-                    logger.warning(f"Argument {i + 1} of function '{name}' expected type {field_type[i].__name__}, got {type(args_list[i]).__name__}")
+                arg = args_list[i]
+                if field_type[i] != object and (not isinstance(arg, Const) or type(arg.value) != field_type[i]):
+                    if not isinstance(arg, Const):
+                        raise ValidationError(f"Argument {i + 1} of function '{name}' expected a constant value")
+                    logger.warning(f"Argument {i + 1} of function '{name}' expected type {field_type[i].__name__}, got {type(arg.value).__name__}")
         return tuple(args_list)
 
     # for LLM
@@ -103,12 +114,34 @@ def quant_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
 
     return func
 
+NORMAL_FUNC = []
+TS_FUNC = []
+CS_FUNC = []
+GROUP_FUNC = []
+
+def quant_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
+    NORMAL_FUNC.append(func.__name__.strip('_'))
+    return register_func(func)
+
 def quant_ts_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
-    @wraps(quant_func(func))
+    TS_FUNC.append(func.__name__.strip('_'))
+    @wraps(register_func(func))
     def wrapper(*args) -> pl.Expr:
         result = func(*args)
         return result.over(pl.col("symbol"))
     return wrapper
+
+def quant_cs_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
+    CS_FUNC.append(func.__name__.strip('_'))
+    @wraps(register_func(func))
+    def wrapper(*args) -> pl.Expr:
+        result = func(*args)
+        return result.over(pl.col("date"))
+    return wrapper
+
+def quant_group_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
+    GROUP_FUNC.append(func.__name__.strip('_'))
+    return register_func(func)
 
 ################ Arithmetic Operators ################
 @quant_func
@@ -294,14 +327,14 @@ def _is_nan(x: pl.Expr) -> pl.Expr:
     return x.is_nan()
 
 # ################ Time Series Operators ################
-# @quant_ts_func
-# def _days_from_last_change(x: pl.Expr) -> pl.Expr:
-#     """
-#     Number of days since the last change in the value of x
-#     """
-#     seg = (x != x.shift(-1)).fill_null(True).cum_sum()
-#     pos = x.cum_count().over(seg)
-#     return pos.shift(1)
+@quant_func
+def _days_from_last_change(x: pl.Expr) -> pl.Expr:
+    """
+    Number of days since the last change in the value of x
+    """
+    seg = (x != x.shift(-1)).fill_null(True).cum_sum()
+    pos = x.cum_count().over([seg, pl.col('symbol')])
+    return pos.shift(1)
 
 @quant_ts_func
 def _kth_element(x: pl.Expr, d: Annotated[int, "lookback"], k: Annotated[int, "k"] = 1) -> pl.Expr:
@@ -314,16 +347,16 @@ def _kth_element(x: pl.Expr, d: Annotated[int, "lookback"], k: Annotated[int, "k
     else:
         return x.fill_null(strategy="forward", limit=d - 1)
 
-# @quant_ts_func
-# def _last_diff_value(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
-#     """
-#     Returns last x value not equal to current x value from last d days
-#     **This operator is slow**
-#     """
-#     idx = pl.col("date").cum_count().reverse()
-#     idx_diff = pl.min_horizontal(pl.when(x.shift(i) != x).then(idx + i).otherwise(None) for i in range(1, d))
-#     v_diff = pl.min_horizontal(pl.when(idx.shift(i) == idx_diff).then(x.shift(i)).otherwise(None) for i in range(1, d))
-#     return v_diff
+@quant_ts_func
+def _last_diff_value(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
+    """
+    Returns last x value not equal to current x value from last d days
+    **This operator is slow**
+    """
+    idx = pl.col("date").cum_count().reverse()
+    idx_diff = pl.min_horizontal(pl.when(x.shift(i) != x).then(idx + i).otherwise(None) for i in range(1, d))
+    v_diff = pl.min_horizontal(pl.when(idx.shift(i) == idx_diff).then(x.shift(i)).otherwise(None) for i in range(1, d))
+    return v_diff
 
 @quant_ts_func
 def _ts_min(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
@@ -449,130 +482,212 @@ def _ts_delay(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     return x.shift(d)
 
-# @wrap_op(2, 2, field_type=(object, int))
-# def _norm_ts_delta(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+@quant_ts_func
+def _ts_delta(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
+    return x - x.shift(d)
 
+@quant_ts_func
+def _ts_mean(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    return x.rolling_mean(window_size=d, min_samples=1)
 
-# @wrap_op(2, 2, field_type=(object, int))
-# def _norm_ts_mean(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+@quant_ts_func
+def _ts_product(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    return x.log().rolling_sum(window_size=d, min_samples=1).exp()
 
-# @wrap_op(2, 2, field_type=(object, int))
-# def _norm_ts_product(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+@quant_ts_func
+def _ts_quantile(x: pl.Expr, d: Annotated[int, 'lookback'], driver: Annotated[str, 'distribution: "gaussian" / "uniform" / "cauchy"'] = "gaussian") -> pl.Expr:
+    rr = (x.rolling_rank(window_size=d, method="min", min_samples=1) - 0.5) / d
+    if driver == 'gaussian':
+        return x.map_batches(lambda s: pl.Series(stats.norm.ppf(s)))
+    elif driver == 'unifrom':
+        return rr
+    elif driver == 'cauchy':
+        return x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s)))
+    else:
+        raise ValidationError(f"Unknown driver {driver} for ts_quantile")
 
-# @wrap_op(2, 3, field_type=(object, int, str))
-# def _norm_ts_quantile(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args if len(args) == 3 else args + (Const("gaussian"),)
+@quant_ts_func
+def _ts_rank(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[float, 'constant'] = 0.0) -> pl.Expr:
+    return (x.rolling_rank(window_size=d, method="min", min_samples=1) - 1) / (d - 1) + pl.lit(constant)
 
-# @wrap_op(2, 3, field_type=(object, int, float))
-# def _norm_ts_rank(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args if len(args) == 3 else args + (Const(0.),)
+@quant_ts_func
+def _ts_regression(y: pl.Expr, x: pl.Expr, d: Annotated[int, 'lookback'], lag: Annotated[int, 'y_i=\\beta x_{i-lag}+\\alpha'] = 0, rettype: Annotated[int, 'what to return'] = 0) -> pl.Expr:
+    lag = int(lag)
+    rettype = int(rettype)
 
-# @wrap_op(3, 5, field_type=(object, object, int, int, int))
-# def _norm_ts_regression(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     if len(args) < 4:
-#         args += (Const(0),)
-#     if len(args) < 5:
-#         args += (Const(0),)
-#     return args
+    x = x.shift(lag)
+    mask = x.is_not_null() & y.is_not_null() & x.is_finite() & y.is_finite()
+    x0  = pl.when(mask).then(x).otherwise(None)
+    y0  = pl.when(mask).then(y).otherwise(None)
+    xx0 = pl.when(mask).then(x * x).otherwise(None)
+    yy0 = pl.when(mask).then(y * y).otherwise(None)
+    xy0 = pl.when(mask).then(x * y).otherwise(None)
+    n0  = pl.when(mask).then(pl.lit(1.0)).otherwise(None)
 
-# @wrap_op(2, 3, field_type=(object, int, float))
-# def _norm_ts_scale(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args if len(args) == 3 else args + (Const(0.),)
+    Sx  = x0.rolling_sum(window_size=d, min_samples=2)
+    Sy  = y0.rolling_sum(window_size=d, min_samples=2)
+    Sxx = xx0.rolling_sum(window_size=d, min_samples=2)
+    Syy = yy0.rolling_sum(window_size=d, min_samples=2)
+    Sxy = xy0.rolling_sum(window_size=d, min_samples=2)
+    n   = n0.rolling_sum(window_size=d, min_samples=2)
 
-# @wrap_op(2, 2, field_type=(object, int))
-# def _norm_ts_stddev(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+    num   = Sxy - (Sx * Sy) / n
+    denom = Sxx - (Sx * Sx) / n
+    sst   = Syy - (Sy * Sy) / n
+    ssr   = (num * num) / denom
+    sse = sst - ssr
 
-# @wrap_op(1, 1)
-# def _norm_ts_step_rank(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+    eps = 1e-12
+    beta = num / denom
 
-# @wrap_op(2, 2, field_type=(object, int))
-# def _norm_ts_sum(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+    mx = x0.rolling_mean(window_size=d, min_samples=2)
+    my = y0.rolling_mean(window_size=d, min_samples=2)
+    alpha = my - beta * mx
 
-# @wrap_op(2, 2, field_type=(object, int))
-# def _norm_ts_zscore(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+    y_ = x * beta + alpha
+
+    mse = sse / (n - 2)
+
+    if rettype == 0: # y - y_
+        ret = y - y_
+    elif rettype == 1: # alpha
+        ret = alpha
+    elif rettype == 2: # beta
+        ret = beta
+    elif rettype == 3: # y_
+        ret = y_
+    elif rettype == 4: # SSE
+        ret = sst - ssr
+    elif rettype == 5: # SST
+        ret = sst
+    elif rettype == 6: # R^2
+        ret = 1 - sse/sst
+    elif rettype == 7: # MSE
+        ret = mse
+    elif rettype == 8: # Standard Error of β
+        ret = mse / denom
+    elif rettype == 9: # Standard Error of α
+        ret = (mse * (1/n + (Sx/n)**2 / denom)).sqrt()
+    else:
+        raise ValidationError(f"Error rettype: {rettype}")
+
+    return pl.when((n >= 2) & denom.abs().gt(eps)).then(ret).otherwise(None)
+
+@quant_ts_func
+def _ts_scale(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[float, 'constant'] = 0) -> pl.Expr:
+    minx = x.rolling_max(window_size=d, min_samples=1)
+    maxx = x.rolling_min(window_size=d, min_samples=1)
+    return (x - minx) / (maxx - minx) + constant
+
+@quant_ts_func
+def _ts_stddev(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    return x.rolling_std(window_size=d, min_samples=1)
+
+@quant_ts_func
+def _ts_step() -> pl.Expr:
+    return pl.col('date').cum_count().reverse()
+
+@quant_ts_func
+def _ts_sum(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    return x.rolling_sum(window_size=d, min_samples=1)
+
+@quant_ts_func
+def _ts_zscore(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    return (x - x.rolling_mean(window_size=d, min_samples=1)) / x.rolling_std(window_size=d, min_samples=1)
 
 # ################ Cross-sectional Operators ################
-# @wrap_op(1, 3, field_type=(object, bool, float))
-# def _norm_normalize(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     if len(args) < 2:
-#         args += (Const(False),)
-#     if len(args) < 3:
-#         args += (Const(0.),)
-#     return args
+@quant_cs_func
+def _normalize(x: pl.Expr, useStd: Annotated[bool, 'divide standard deviation or not'] = False, limit: Annotated[float, 'result clip to [-limit, limit]'] = 0.0) -> pl.Expr:
+    ret = x - x.mean()
+    if useStd:
+        ret = ret / x.std(ddof=0)
+    if abs(limit) > 1e-6:
+        ret = ret.clip(-abs(limit), abs(limit))
+    return ret
 
-# @wrap_op(1, 3, field_type=(object, str, float))
-# def _norm_quantile(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     if len(args) < 2:
-#         args += (Const("gaussian"),)
-#     if len(args) < 3:
-#         args += (Const(1.0),)
-#     return args
+@quant_cs_func
+def _quantile(x: pl.Expr, driver: Annotated[str, 'distribution: "gaussian" / "uniform" / "cauchy"'] = "gaussian", sigma: Annotated[float, 'scale on final value'] = 1.0) -> pl.Expr:
+    rr = (x.rank(method="min") - 1) / (x.len() - 1)
+    if driver == 'gaussian':
+        return x.map_batches(lambda s: pl.Series(stats.norm.ppf(s)))
+    elif driver == 'unifrom':
+        return rr
+    elif driver == 'cauchy':
+        return x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s)))
+    else:
+        raise ValidationError(f"Unknown driver {driver} for quantile")
 
-# @wrap_op(1, 2, field_type=(object, int))
-# def _norm_rank(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     if len(args) < 2:
-#         args += (Const(2),)
-#     return args
+@quant_cs_func
+def _rank(x: pl.Expr, rate: Annotated[int, '10**rate buckets'] = 2) -> pl.Expr:
+    n = x.len()
+    r1 = (x.rank(method='min') - 1) / (n - 1)
+    rate = int(rate)
+    if rate < 0: raise ValidationError("rate must >= 0 for rank")
+    if rate == 0:
+        return r1
+    bucket_cnt = pl.lit(10 ** rate)
+    bucket = (r1 * bucket_cnt).floor()
+    r2 = (bucket.rank(method='min') - 1) / (n - 1)
+    return r2
 
-# @wrap_op(1, 4, field_type=(object, int, int, int))
-# def _norm_scale(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     if len(args) < 2:
-#         args += (Const(1),)
-#     if len(args) < 3:
-#         args += (Const(1),)
-#     if len(args) < 4:
-#         args += (Const(1),)
-#     return args
+@quant_cs_func
+def _scale(x: pl.Expr, scale: Annotated[float, 'scale for all'] = 1.0, longscale: Annotated[float, 'scale for long position'] = 1.0, shortscale: Annotated[float, 'scale for short position'] = 1.0) -> pl.Expr:
+    pos = pl.when(x > 0).then(x).otherwise(0.0)
+    neg = pl.when(x < 0).then(x).otherwise(0.0)
+    long_sum = pos.sum()
+    short_sum = neg.abs().sum()
+    if abs(scale - 1.0) > 1e-6:
+        denom = x.abs().sum()
+        return scale * x / denom
+    
+    return pl.when(x > 0).then(longscale * x / long_sum) \
+             .when(x < 0).then(shortscale * x / short_sum) \
+             .otherwise(0.0)
 
-# @wrap_op(1, 2, field_type=(object, int))
-# def _norm_winsorize(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     if len(args) < 2:
-#         args += (Const(4),)
-#     return args
+@quant_cs_func
+def _winsorize(x: pl.Expr, std: Annotated[float, 'multiple of std'] = 4.0) -> pl.Expr:
+    mu = x.mean()
+    sigma = x.std(ddof=0)
+    return x.clip(mu - std * sigma, mu + std * sigma)
 
-# @wrap_op(1, 1)
-# def _norm_zscore(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
-
-# @wrap_op(1, 2, field_type=(object, float))
-# def _norm_clip_pct(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     if len(args) < 2:
-#         args += (Const(0.01),)
-#     return args
+@quant_cs_func
+def _zscore(x: pl.Expr) -> pl.Expr:
+    return (x - x.mean()) / x.std(ddof=0)
 
 # ################ Group Operators ################
-# @wrap_op(3, 4, field_type=(object, str, int, float))
-# def _norm_group_backfill(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     if len(args) < 4:
-#         args += (Const(4.0),)
-#     return args
+# @quant_group_func
+# def _group_backfill(x: pl.Expr, group: Annotated[str, 'group by'], d: Annotated[int, 'lookback'], std: Annotated[float, 'multiple of std'] = 4.0) -> pl.Expr:
+#     if group not in GROUP_FIELDS:
+#         raise ValidationError("Supported group: " + ', '.join(GROUP_FIELDS))
+#     d = int(d)
+#     if d < 0: raise ValidationError("lookback days must > 0")
+#     meanx = x.mean()
+#     stdx = x.std(ddof=1)
+#     lower = (meanx - std * stdx)
+#     upper = (meanx + std * stdx)
+#     return pl.when(x.is_not_null()).then(x.clip(lower_bound=lower, upper_bound=upper)).otherwise(meanx) \
+#           .rolling(index_column=DATE_COL, period=f"{d}d").over(group)
 
-# @wrap_op(3, 3, field_type=(object, float, str))
-# def _norm_group_mean(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+@quant_group_func
+def _group_mean(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    if group not in FIELDS: raise ValidationError(f"Cannot group by {group}")
+    return x.mean().over([DATE_COL, group])
 
-# @wrap_op(2, 2, field_type=(object, str))
-# def _norm_group_neutralize(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+@quant_group_func
+def _group_neutralize(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    ret = (x - x.mean()) / x.std(ddof=0)
+    return ret.over([DATE_COL, group])
 
-# @wrap_op(2, 2, field_type=(object, str))
-# def _norm_group_rank(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+@quant_group_func
+def _group_rank(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    return ((x.rank(method='min') - 1) / (x.len() - 1)).over([DATE_COL, group])
 
-# @wrap_op(2, 2, field_type=(object, str))
-# def _norm_group_scale(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
+@quant_group_func
+def _group_scale(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    minx = x.min()
+    maxx = x.max()
+    return ((x - minx) / (maxx - minx)).over([DATE_COL, group])
 
-# @wrap_op(2, 2, field_type=(object, str))
-# def _norm_group_zscore(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
-#     return args
-
-
-FIELDS = {'symbol', 'date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'returns', 'vwap', 'cap', 'industry'}
+@quant_group_func
+def _group_zscore(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    return ((x - x.mean()) / x.std(ddof=0)).over([DATE_COL, group])

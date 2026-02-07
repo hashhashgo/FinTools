@@ -44,7 +44,8 @@ class ParserError(Exception):
 
 _token_re = re.compile(
     r"""\s*(
-        \d+(?:\.\d*)? | \.\d+ |    # Number
+        \d+\.\d* | \.\d+ |         # Real
+        \d+           |            # Integer
         [A-Za-z_]\w*  |            # Identifier
         \"[^\"]*\"    |            # String literal
         true | false  |            # Boolean literals
@@ -67,8 +68,10 @@ def tokenize(expression: str) -> Iterable[Tuple[str, str]]:
             raise ParserError(f"Unexpected character at position {pos}: '{expression[pos]}'", expression, pos)
         tok = match.group(1)
         pos = match.end()
-        if re.fullmatch(r"\d+(?:\.\d*)?|\.\d+", tok):
-            yield ("NUMBER", tok)
+        if re.fullmatch(r"\d+\.\d*|\.\d+", tok):
+            yield ("REAL", tok)
+        elif re.fullmatch(r"\d+", tok):
+            yield ("INTEGER", tok)
         elif re.fullmatch(r'"[^"]*"', tok):
             yield ("STRING", tok[1:-1])
         elif tok in {"true", "false"}:
@@ -166,9 +169,13 @@ class Parser:
         
     def nud(self) -> Node:
         k, v = self.peek()
-        if k == "NUMBER":
-            self.eat("NUMBER")
+        if k == "REAL":
+            self.eat("REAL")
             return Const(float(v))
+        
+        elif k == "INTEGER":
+            self.eat("INTEGER")
+            return Const(int(v))
         
         elif k == "STRING":
             self.eat("STRING")

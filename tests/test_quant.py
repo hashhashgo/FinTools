@@ -5,13 +5,13 @@ if __name__ == "__main__":
 
 def test_fetch_everything():
     from fintools.quant.utils import fetch_everything
-    import pandas as pd
+    import polars as pl
 
     df_stocks = fetch_everything()
 
     # Basic checks
-    assert isinstance(df_stocks, pd.DataFrame)
-    assert not df_stocks.empty
+    assert isinstance(df_stocks, pl.DataFrame)
+    assert not df_stocks.is_empty()
     assert 'ts_code' in df_stocks.columns
 
 def test_compile_expression(pre_hash: list[str] = [], raise_if_error=True):
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     import os
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
-    test_fetch_everything()
+    # test_fetch_everything()
     # test_compile_expression(raise_if_error=False)
     # print("All tests passed.")
     observer = Observer()

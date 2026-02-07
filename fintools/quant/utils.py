@@ -17,9 +17,9 @@ from fintools.runtime.rate_limit import GLOBAL_REGISTRY, Policy
 from fintools.runtime.rate_limit.limits_backend import _make_item
 from fintools.runtime.data_sources.tushare import pro
 
-_stock_cache = None
+_stock_cache: pl.DataFrame | None = None
 
-def _fetch_all_stock_deep(df: pl.DataFrame) -> pl.DataFrame:
+def _fetch_all_stock_deep(df: pl.DataFrame, last_trade_date = datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=10)) -> pl.DataFrame:
     df_stocks = []
     underlyings = stock_basic()['ts_code'].unique()
     last_trade_dates = dict(zip(*df.group_by('ts_code').agg(pl.col('date').max())))
@@ -30,6 +30,7 @@ def _fetch_all_stock_deep(df: pl.DataFrame) -> pl.DataFrame:
             type = UnderlyingType.STOCK,
             freq = DataFrequency.DAILY,
             start = last_trade_dates.get(u, 0),
+            end = last_trade_date,
             only_standard_columns=False
         )) : underlying for underlying in underlyings}
 
@@ -40,8 +41,7 @@ def _fetch_all_stock_deep(df: pl.DataFrame) -> pl.DataFrame:
         for future in t:
             t.postfix = f"Remaining: {GLOBAL_REGISTRY.backend.limiter.get_window_stats(item, 'tushare:daily').remaining} / {policy.max_calls}"
             df = pl.from_pandas(future.result())
-            df = df.rename({"trade_date": "date"})
-            df = df.with_columns(pl.col('date').str.strptime(pl.Datetime, format="%Y%m%d").dt.cast_time_unit("ns").dt.replace_time_zone("Asia/Shanghai"))
+            df = df.with_columns(pl.col('date').dt.cast_time_unit("ns").dt.replace_time_zone("Asia/Shanghai"))
             df_stocks.append(df)
     
     return pl.concat(df_stocks, how="vertical")
@@ -86,17 +86,21 @@ def fetch_all_stock():
         df_stocks = []
         for df in tqdm.tqdm(pd.read_sql(f"SELECT * from {table_name}", cursor.connection, chunksize=100000), total=(total_count // 100000) + 1, desc="Loading data from DB"):
             df = db.format_dataframe(df, common_fields=common_fields)
-            df_stocks.append(df)
+            df_stocks.append(pl.from_pandas(df))
         df = pl.concat(df_stocks, how="vertical")
         del df_stocks
+    df = pl.DataFrame(df)
     last_trade_date = df['date'].max()
-    assert isinstance(last_trade_date, datetime), "No data found in the database."
-    if datetime.now(ZoneInfo("Asia/Shanghai")) - last_trade_date > timedelta(days=10):
+    if not isinstance(last_trade_date, datetime) \
+        or datetime.now(ZoneInfo("Asia/Shanghai")) - last_trade_date > timedelta(days=10) \
+        or df['ts_code'].unique().len() < stock_basic()['ts_code'].nunique():
         data =  _fetch_all_stock_deep(df)
-    else:
-        data = _fetch_all_stock_shallow(last_trade_date=last_trade_date)
-        data = data.rename({'vol': 'volume'})
-    df = pl.concat([df, data], how="vertical").unique(subset=['ts_code', 'date'])
+        df = pl.concat([df[data.columns], data], how="vertical").unique(subset=['ts_code', 'date'])
+        last_trade_date = df['date'].max()
+    assert isinstance(last_trade_date, datetime)
+    data = _fetch_all_stock_shallow(last_trade_date=last_trade_date)
+    data = data.rename({'vol': 'volume'})
+    df = pl.concat([df[data.columns], data], how="vertical").unique(subset=['ts_code', 'date'])
     
     _stock_cache = df
     if os.getenv("PARQUET_STORAGE_PATH") is not None:
@@ -154,10 +158,10 @@ def fetch_daily_basic() -> pl.DataFrame:
             t = tqdm.tqdm(as_completed(futures), total=len(futures), desc="Fetching stock data")
             policy = GLOBAL_REGISTRY._resolve_endpoint_policy("tushare", "daily_basic")
             for future in t:
-                df = pl.from_pandas(future.result())
-                df = df.rename({'trade_date': 'date'})
-                df = df.with_columns(pl.col('date').str.strptime(pl.Datetime, format="%Y%m%d").dt.cast_time_unit("ns").dt.replace_time_zone("Asia/Shanghai"))
-                if not df.is_empty():
+                df = future.result()
+                df = df.rename(columns={'trade_date': 'date'})
+                df['date'] = pd.to_datetime(df['date'], format="%Y%m%d").dt.as_unit("ns").dt.tz_localize("Asia/Shanghai")
+                if not df.empty:
                     df_stocks.append(df)
                 t.postfix = f"Remaining: {GLOBAL_REGISTRY.backend.limiter.get_window_stats(item, 'tushare:daily_basic').remaining} / {policy.max_calls}"
         data = pl.concat(df_stocks, how="vertical")
@@ -184,7 +188,4 @@ def make_dataset():
         (pl.col("amount") / pl.col("volume")).alias("vwap"),
     )
     df = df.sort(by=['symbol', 'date'], descending=[False, False])
-    df = df.with_columns(
-        pl.arange(start=0, end=pl.len()).alias("idx")
-    )
     return df.select(FIELDS)
