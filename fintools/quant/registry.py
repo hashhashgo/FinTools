@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ast import expr
 from dataclasses import dataclass
-from typing import Callable, Dict, Tuple, List, cast, get_type_hints, get_args, get_origin, Annotated
+from typing import Callable, Dict, Tuple, List, cast, get_type_hints, get_args, get_origin, Annotated, TypeAlias
 import inspect
 from functools import wraps
 import logging
@@ -36,13 +36,15 @@ class OpSpec:
 
 OPS: Dict[str, OpSpec] = {}
 
+Anything: TypeAlias = pl.Expr | float | int | bool
+VALIDATABLE_TYPES = {int, float, str, bool}
 def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
     sig = inspect.signature(func)
     name = func.__name__.strip('_')
     params = sig.parameters
     min_arity = 0
     max_arity = 0
-    type_hints = {k: v if not v is pl.Expr else object for k, v in get_type_hints(func).items()}
+    type_hints = {k: v if v in VALIDATABLE_TYPES else object for k, v in get_type_hints(func).items()}
     fileds = []
     for p in params.values():
         max_arity += 1
@@ -86,7 +88,7 @@ def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
     for p in params.values():
         if p.name in type_hints_extra and get_origin(type_hints_extra[p.name]) is Annotated:
             annotated_args = get_args(type_hints_extra[p.name])
-            dtype = annotated_args[0] if get_origin(annotated_args[0]) is not pl.Expr else object
+            dtype = annotated_args[0] if get_origin(annotated_args[0]) in VALIDATABLE_TYPES else object
             if LLMHidden in annotated_args[1:]: continue
             param_list.append((p.name, dtype, p.default if p.default is not p.empty else None))
             if len(annotated_args) >= 2:
@@ -153,177 +155,268 @@ def _densify(x: pl.Expr) -> pl.Expr:
     return x.rank(method="dense")
 
 @quant_func
-def _abs(x: pl.Expr) -> pl.Expr:
+def _abs(x: Anything) -> pl.Expr:
     """
     Absolute value of x
     """
-    return x.abs()
+    if not isinstance(x, pl.Expr):
+        return pl.lit(abs(x))
+    else:
+        return x.abs()
 
 @quant_func
-def _neg(x: pl.Expr) -> pl.Expr:
+def _neg(x: Anything) -> pl.Expr:
     """
     Equivalent of unary minus operator -x
     """
-    return x.neg()
+    if not isinstance(x, pl.Expr):
+        return pl.lit(-x)
+    else:
+        return x.neg()
 
 @quant_func
-def _add(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _add(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of binary addition operator x + y
     """
-    return x + y
+    if not isinstance(x, pl.Expr) and not isinstance(y, pl.Expr):
+        return pl.lit(x + y)
+    elif not isinstance(x, pl.Expr):
+        return pl.lit(x) + y
+    elif not isinstance(y, pl.Expr):
+        return x + pl.lit(y)
+    else:
+        return x + y
 
 @quant_func
-def _sub(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _sub(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of binary subtraction operator x - y
     """
-    return x - y
+    if not isinstance(x, pl.Expr) and not isinstance(y, pl.Expr):
+        return pl.lit(x - y)
+    elif not isinstance(x, pl.Expr):
+        return pl.lit(x) - y
+    elif not isinstance(y, pl.Expr):
+        return x - pl.lit(y)
+    else:
+        return x - y
 
 @quant_func
-def _mul(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _mul(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of binary multiplication operator x * y
     """
-    return x * y
+    if not isinstance(x, pl.Expr) and not isinstance(y, pl.Expr):
+        return pl.lit(x * y)
+    elif not isinstance(x, pl.Expr):
+        return pl.lit(x) * y
+    elif not isinstance(y, pl.Expr):
+        return x * pl.lit(y)
+    else:
+        return x * y
 
 @quant_func
-def _div(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _div(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of binary division operator x / y
     """
-    return x / y
+    if not isinstance(x, pl.Expr) and not isinstance(y, pl.Expr):
+        return pl.lit(x / y)
+    elif not isinstance(x, pl.Expr):
+        return pl.lit(x) / y
+    elif not isinstance(y, pl.Expr):
+        return x / pl.lit(y)
+    else:
+        return x / y
 
 @quant_func
-def _pow(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _pow(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of binary exponentiation operator x ** y
     """
-    return x ** y
+    if not isinstance(x, pl.Expr) and not isinstance(y, pl.Expr):
+        return pl.lit(x ** y)
+    elif not isinstance(x, pl.Expr):
+        return pl.lit(x) ** y
+    elif not isinstance(y, pl.Expr):
+        return x ** pl.lit(y)
+    else:
+        return x ** y
 
 @quant_func
-def _log(x: pl.Expr) -> pl.Expr:
+def _log(x: Anything) -> pl.Expr:
     """
     natural logarithm
     """
-    return x.log()
+    if not isinstance(x, pl.Expr):
+        return pl.lit(x).log()
+    else:
+        return x.log()
 
 @quant_func
-def _max(*args: pl.Expr) -> pl.Expr:
+def _max(*args: Anything) -> pl.Expr:
     """
     Maximum value among the arguments
     """
     return pl.max_horizontal(*args)
 
 @quant_func
-def _min(*args: pl.Expr) -> pl.Expr:
+def _min(*args: Anything) -> pl.Expr:
     """
     Minimum value among the arguments
     """
     return pl.min_horizontal(*args)
 
 @quant_func
-def _sign(x: pl.Expr) -> pl.Expr:
+def _sign(x: Anything) -> pl.Expr:
     """
     Sign of x
     * -1 if x < 0.
     *  1 if x > 0.
     *  x otherwise (typically 0, but could be NaN if the input is).
     """
-    return x.sign()
+    if not isinstance(x, pl.Expr):
+        return pl.lit(x).sign()
+    else:
+        return x.sign()
 
 @quant_func
-def _signed_pow(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _signed_pow(x: Anything, y: Anything) -> pl.Expr:
     """
     Signed power function
     Computes x raised to the power of y, preserving the sign of x.
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(y)
     return pl.when(x >= 0).then(x ** y).otherwise(-( (-x) ** y))
 
 @quant_func
-def _sqrt(x: pl.Expr) -> pl.Expr:
+def _sqrt(x: Anything) -> pl.Expr:
     """
     Square root of x
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
     return x.sqrt()
 
 # ################ Logical Operators ################
 @quant_func
-def _and(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _and(x: Anything, y: Anything) -> pl.Expr:
     """
     Logical AND operation between x and y
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(bool(x))
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(bool(y))
     return x.cast(pl.Boolean) & y.cast(pl.Boolean)
 
 @quant_func
-def _or(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _or(x: Anything, y: Anything) -> pl.Expr:
     """
     Logical OR operation between x and y
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(bool(x))
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(bool(y))
     return x.cast(pl.Boolean) | y.cast(pl.Boolean)
 
 @quant_func
-def _not(x: pl.Expr) -> pl.Expr:
+def _not(x: Anything) -> pl.Expr:
     """
     Logical NOT operation on x
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(bool(x))
     return ~x.cast(pl.Boolean)
 
 @quant_func
-def _where(cond: pl.Expr, x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _where(cond: Anything, x: Anything, y: Anything) -> pl.Expr:
     """
     Conditional selection
     Returns x where cond is true, and y otherwise.
     """
+    if not isinstance(cond, pl.Expr):
+        cond = pl.lit(bool(cond))
     return pl.when(cond.cast(pl.Boolean)).then(x).otherwise(y)
 
 @quant_func
-def _gt(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _gt(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of greater-than operator x > y
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(y)
     return x > y
 
 @quant_func
-def _lt(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _lt(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of less-than operator x < y
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(y)
     return x < y
 
 @quant_func
-def _ge(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _ge(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of greater-than-or-equal-to operator x >= y
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(y)
     return x >= y
 
 @quant_func
-def _le(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _le(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of less-than-or-equal-to operator x <= y
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(y)
     return x <= y
 
 @quant_func
-def _eq(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _eq(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of equality operator x == y
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(y)
     return x == y
 
 @quant_func
-def _ne(x: pl.Expr, y: pl.Expr) -> pl.Expr:
+def _ne(x: Anything, y: Anything) -> pl.Expr:
     """
     Equivalent of not-equal-to operator x != y
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
+    if not isinstance(y, pl.Expr):
+        y = pl.lit(y)
     return x != y
 
 @quant_func
-def _is_nan(x: pl.Expr) -> pl.Expr:
+def _is_nan(x: Anything) -> pl.Expr:
     """
     Check if x is NaN
     """
+    if not isinstance(x, pl.Expr):
+        x = pl.lit(x)
     return x.is_nan()
 
 # ################ Time Series Operators ################
@@ -484,23 +577,36 @@ def _ts_delay(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
 
 @quant_ts_func
 def _ts_delta(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
+    """
+    Difference between current x and x d days ago
+    """
     return x - x.shift(d)
 
 @quant_ts_func
 def _ts_mean(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    """
+    Mean of x over the past d days
+    """
     return x.rolling_mean(window_size=d, min_samples=1)
 
 @quant_ts_func
 def _ts_product(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    """
+    Product of x over the past d days
+    """
     return x.log().rolling_sum(window_size=d, min_samples=1).exp()
 
 @quant_ts_func
 def _ts_quantile(x: pl.Expr, d: Annotated[int, 'lookback'], driver: Annotated[str, 'distribution: "gaussian" / "uniform" / "cauchy"'] = "gaussian") -> pl.Expr:
-    rr = (x.rolling_rank(window_size=d, method="min", min_samples=1) - 0.5) / d
+    """
+    It calculates ts_rank and apply to its value an inverse cumulative density function from driver distribution.
+    """
+    rr = (x.rolling_rank(window_size=d, method="min", min_samples=1) - 1) / (d - 1)
+    rr = 1 / d + rr * (1 - 2 / d)
     if driver == 'gaussian':
         return x.map_batches(lambda s: pl.Series(stats.norm.ppf(s)))
-    elif driver == 'unifrom':
-        return rr
+    elif driver == 'uniform':
+        return rr - rr.rolling_mean(window_size=d, min_samples=1)
     elif driver == 'cauchy':
         return x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s)))
     else:
@@ -508,10 +614,28 @@ def _ts_quantile(x: pl.Expr, d: Annotated[int, 'lookback'], driver: Annotated[st
 
 @quant_ts_func
 def _ts_rank(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[float, 'constant'] = 0.0) -> pl.Expr:
+    """
+    Rank of x over the past d days, normalized to [0, 1], then return the rank of the current value + constant.
+    """
     return (x.rolling_rank(window_size=d, method="min", min_samples=1) - 1) / (d - 1) + pl.lit(constant)
 
 @quant_ts_func
 def _ts_regression(y: pl.Expr, x: pl.Expr, d: Annotated[int, 'lookback'], lag: Annotated[int, 'y_i=\\beta x_{i-lag}+\\alpha'] = 0, rettype: Annotated[int, 'what to return'] = 0) -> pl.Expr:
+    """
+    Perform linear regression of y on x over the past d days with optional lag and return specified regression component.
+    y_i = β * x_{i-lag} + α
+    rettype options:
+    - 0: residuals (y - y_)
+    - 1: alpha (intercept)
+    - 2: beta (slope)
+    - 3: y-estimate (y_)
+    - 4: SSE (Sum of Squared Errors)
+    - 5: SST (Total Sum of Squares)
+    - 6: R^2 (Coefficient of Determination)
+    - 7: MSE (Mean Squared Error)
+    - 8: Standard Error of β
+    - 9: Standard Error of α
+    """
     lag = int(lag)
     rettype = int(rettype)
 
@@ -575,29 +699,48 @@ def _ts_regression(y: pl.Expr, x: pl.Expr, d: Annotated[int, 'lookback'], lag: A
 
 @quant_ts_func
 def _ts_scale(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[float, 'constant'] = 0) -> pl.Expr:
+    """
+    Scale x over the past d days to the range [0, 1] + constant.
+    """
     minx = x.rolling_max(window_size=d, min_samples=1)
     maxx = x.rolling_min(window_size=d, min_samples=1)
     return (x - minx) / (maxx - minx) + constant
 
 @quant_ts_func
 def _ts_stddev(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    """
+    Standard deviation of x over the past d days
+    """
     return x.rolling_std(window_size=d, min_samples=1)
 
 @quant_ts_func
 def _ts_step() -> pl.Expr:
+    """
+    Returns days' counter. 0 for the most recent day, 1 for the previous day, and so on.
+    """
     return pl.col('date').cum_count().reverse()
 
 @quant_ts_func
 def _ts_sum(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    """
+    Sum of x over the past d days
+    """
     return x.rolling_sum(window_size=d, min_samples=1)
 
 @quant_ts_func
 def _ts_zscore(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
+    """
+    Z-score normalization of x over the past d days
+    """
     return (x - x.rolling_mean(window_size=d, min_samples=1)) / x.rolling_std(window_size=d, min_samples=1)
 
 # ################ Cross-sectional Operators ################
 @quant_cs_func
 def _normalize(x: pl.Expr, useStd: Annotated[bool, 'divide standard deviation or not'] = False, limit: Annotated[float, 'result clip to [-limit, limit]'] = 0.0) -> pl.Expr:
+    """
+    Normalize x for each date by subtracting the mean and optionally dividing by the standard deviation.
+    Optionally clip the result to the range [-limit, limit] if limit is non-zero.
+    """
     ret = x - x.mean()
     if useStd:
         ret = ret / x.std(ddof=0)
@@ -607,18 +750,28 @@ def _normalize(x: pl.Expr, useStd: Annotated[bool, 'divide standard deviation or
 
 @quant_cs_func
 def _quantile(x: pl.Expr, driver: Annotated[str, 'distribution: "gaussian" / "uniform" / "cauchy"'] = "gaussian", sigma: Annotated[float, 'scale on final value'] = 1.0) -> pl.Expr:
+    """
+    It calculates rank and apply to its value an inverse cumulative density function from driver distribution for each date.
+    Finally scale the result by sigma.
+    """
     rr = (x.rank(method="min") - 1) / (x.len() - 1)
+    rr = 1 / x.len() + rr * (1 - 2 / x.len())
     if driver == 'gaussian':
-        return x.map_batches(lambda s: pl.Series(stats.norm.ppf(s)))
-    elif driver == 'unifrom':
-        return rr
+        ret = x.map_batches(lambda s: pl.Series(stats.norm.ppf(s)))
+    elif driver == 'uniform':
+        ret = rr - rr.mean()
     elif driver == 'cauchy':
-        return x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s)))
+        ret = x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s)))
     else:
         raise ValidationError(f"Unknown driver {driver} for quantile")
+    return ret * sigma
 
 @quant_cs_func
 def _rank(x: pl.Expr, rate: Annotated[int, '10**rate buckets'] = 2) -> pl.Expr:
+    """
+    Rank x for each date, normalized to [0, 1], then re-rank into 10**rate buckets and normalize again.
+    For precise sort, use the rate as 0.
+    """
     n = x.len()
     r1 = (x.rank(method='min') - 1) / (n - 1)
     rate = int(rate)
@@ -632,6 +785,11 @@ def _rank(x: pl.Expr, rate: Annotated[int, '10**rate buckets'] = 2) -> pl.Expr:
 
 @quant_cs_func
 def _scale(x: pl.Expr, scale: Annotated[float, 'scale for all'] = 1.0, longscale: Annotated[float, 'scale for long position'] = 1.0, shortscale: Annotated[float, 'scale for short position'] = 1.0) -> pl.Expr:
+    """
+    Scale x for each date such that the sum of absolute values equals scale.
+    If scale is not 1.0, both longscale and shortscale are ignored.
+    If scale is 1.0, longscale and shortscale are used to scale positive and negative values separately.
+    """
     pos = pl.when(x > 0).then(x).otherwise(0.0)
     neg = pl.when(x < 0).then(x).otherwise(0.0)
     long_sum = pos.sum()
@@ -646,12 +804,18 @@ def _scale(x: pl.Expr, scale: Annotated[float, 'scale for all'] = 1.0, longscale
 
 @quant_cs_func
 def _winsorize(x: pl.Expr, std: Annotated[float, 'multiple of std'] = 4.0) -> pl.Expr:
+    """
+    Winsorize x for each date by clipping values to the range [mean - std * stddev, mean + std * stddev].
+    """
     mu = x.mean()
     sigma = x.std(ddof=0)
     return x.clip(mu - std * sigma, mu + std * sigma)
 
 @quant_cs_func
 def _zscore(x: pl.Expr) -> pl.Expr:
+    """
+    Z-score normalization of x for each date
+    """
     return (x - x.mean()) / x.std(ddof=0)
 
 # ################ Group Operators ################
@@ -670,24 +834,39 @@ def _zscore(x: pl.Expr) -> pl.Expr:
 
 @quant_group_func
 def _group_mean(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    """
+    Mean of x within each group for each date
+    """
     if group not in FIELDS: raise ValidationError(f"Cannot group by {group}")
     return x.mean().over([DATE_COL, group])
 
 @quant_group_func
 def _group_neutralize(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    """
+    Neutralize x within each group for each date by subtracting the group mean and dividing by the group standard deviation.
+    """
     ret = (x - x.mean()) / x.std(ddof=0)
     return ret.over([DATE_COL, group])
 
 @quant_group_func
 def _group_rank(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    """
+    Rank of x within each group for each date, normalized to [0, 1]
+    """
     return ((x.rank(method='min') - 1) / (x.len() - 1)).over([DATE_COL, group])
 
 @quant_group_func
 def _group_scale(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    """
+    Scale x within each group for each date to the range [0, 1]
+    """
     minx = x.min()
     maxx = x.max()
     return ((x - minx) / (maxx - minx)).over([DATE_COL, group])
 
 @quant_group_func
 def _group_zscore(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+    """
+    Z-score normalization of x within each group for each date
+    """
     return ((x - x.mean()) / x.std(ddof=0)).over([DATE_COL, group])

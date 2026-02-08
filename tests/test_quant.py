@@ -18,6 +18,7 @@ def test_compile_expression(pre_hash: list[str] = [], raise_if_error=True):
     from fintools.quant.engine import compile_expression
     from fintools.quant.parser import ParserError
     from fintools.quant.validate import ValidationError
+    from fintools.quant.compiler import CompileError
     import hashlib
 
     with open("tests/alpha101.txt", "r") as f:
@@ -56,6 +57,12 @@ def test_compile_expression(pre_hash: list[str] = [], raise_if_error=True):
                     raise ve
                 else:
                     print(f"ValidationError compiling expression #{i + 1}: {ve}")
+
+            except CompileError as ce:
+                if raise_if_error:
+                    raise ce
+                else:
+                    print(f"CompileError compiling expression #{i + 1}: {ce}")
 
             except Exception as e:
                 raise e

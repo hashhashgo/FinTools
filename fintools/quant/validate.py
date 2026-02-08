@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json, hashlib
-from typing import cast
 from .AST import Node, Field, Const, Call
 from .registry import OPS, FIELDS, ValidationError
 
