@@ -88,11 +88,11 @@ def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
     for p in params.values():
         if p.name in type_hints_extra and get_origin(type_hints_extra[p.name]) is Annotated:
             annotated_args = get_args(type_hints_extra[p.name])
-            dtype = annotated_args[0] if get_origin(annotated_args[0]) in VALIDATABLE_TYPES else object
+            dtype = annotated_args[0] if annotated_args[0] in VALIDATABLE_TYPES else object
             if LLMHidden in annotated_args[1:]: continue
             param_list.append((p.name, dtype, p.default if p.default is not p.empty else None))
             if len(annotated_args) >= 2:
-                hint_params.append(f"{p.name}: {dtype} ({annotated_args[1:]})")
+                hint_params.append(f"{p.name}: " + ', '.join(str(arg) for arg in annotated_args[1:]))
                 continue
         if p.name in type_hints and type_hints[p.name] is not object:
             param_list.append((p.name, type_hints[p.name], p.default if p.default is not p.empty else None))
@@ -120,11 +120,12 @@ def func_doc(func_name: str) -> str:
     if func_name not in OPS:
         raise ValidationError(f"Unknown function '{func_name}'")
     ops = OPS[func_name]
-    return \
-f"""{ops.hint_func_sig}
+    return f"""
+{ops.hint_func_sig}
 {ops.hint_func_doc}
 Parameters:
 """ + "\n".join([f"- {p}" for p in ops.hint_params])
+
 
 NORMAL_FUNC = []
 TS_FUNC = []
