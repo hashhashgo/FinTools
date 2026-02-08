@@ -80,8 +80,6 @@ def ast_to_canonical_json(node: Node) -> str:
         if isinstance(n, Field):
             return {"type": "Field", "name": n.name}
         elif isinstance(n, Const):
-            if isinstance(n.value, float) and int(n.value) == n.value:
-                return {"type": "Const", "value": int(n.value)}
             return {"type": "Const", "value": n.value}
         elif isinstance(n, Call):
             return {"type": "Call", "fn": n.fn, "args": [node_to_dict(arg) for arg in n.args]}

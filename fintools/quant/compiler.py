@@ -1,7 +1,6 @@
 from __future__ import annotations
 import polars as pl
-from typing import Callable, Dict, Tuple, Any, Optional
-import json, hashlib
+from typing import Dict, Any, Optional
 
 from .AST import Node, Field, Const, Call
 from .validate import ast_to_hash
@@ -10,13 +9,10 @@ from .registry import OPS, FIELDS
 class CompileError(Exception): pass
 
 
-def compile_expr(node: Node, *, memo: Optional[Dict[Node, Any]] = None) -> Any:
+def compile_expr(node: Node, *, memo: Optional[Dict[str, Any]] = None) -> Any:
     if memo is None:
         memo = {}
     
-    if node in memo:
-        return memo[node]
-
     key = ast_to_hash(node=node)
     if key in memo:
         return memo[key]
@@ -40,5 +36,5 @@ def compile_expr(node: Node, *, memo: Optional[Dict[Node, Any]] = None) -> Any:
     else:
         raise CompileError(f"Unknown node type: {type(node)}")
     
-    memo[node] = result
+    memo[key] = result
     return result
