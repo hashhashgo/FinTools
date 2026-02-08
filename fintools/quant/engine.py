@@ -2,20 +2,24 @@ import polars as pl
 from .parser import Parser
 from .validate import normalize, validate, ast_to_hash
 from .compiler import compile_expr
+from .utils import make_dataset
 
-expr_memo = {}
+class QuantEngine:
+    def __init__(self):
+        self.expr_cache = {}
 
-def compile_expression(expr: str) -> dict:
-    ast = Parser(expression=expr).parse()
-    ast = normalize(ast)
-    validate(ast)
-    hashed = ast_to_hash(ast)
-    compiled = compile_expr(ast, memo=expr_memo)
-    return {
-        "ast": ast,
-        "aid": hashed,
-        "compiled": compiled,
-        "expr": expr
-    }
+    def init(self):
+        self.dataset = make_dataset()
 
-__all__ = ['compile_expression']
+    def compile(self, expr: str) -> dict:
+        ast = Parser(expression=expr).parse()
+        ast = normalize(ast)
+        validate(ast)
+        hashed = ast_to_hash(ast)
+        compiled = compile_expr(ast, memo=self.expr_cache)
+        return {
+            "ast": ast,
+            "aid": hashed,
+            "compiled": compiled,
+            "expr": expr
+        }

@@ -116,6 +116,16 @@ def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
 
     return func
 
+def func_doc(func_name: str) -> str:
+    if func_name not in OPS:
+        raise ValidationError(f"Unknown function '{func_name}'")
+    ops = OPS[func_name]
+    return \
+f"""{ops.hint_func_sig}
+{ops.hint_func_doc}
+Parameters:
+""" + "\n".join([f"- {p}" for p in ops.hint_params])
+
 NORMAL_FUNC = []
 TS_FUNC = []
 CS_FUNC = []
