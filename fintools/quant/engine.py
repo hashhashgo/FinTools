@@ -14,7 +14,8 @@ def compile_expression(expr: str) -> dict:
     return {
         "ast": ast,
         "aid": hashed,
-        "compiled": compiled
+        "compiled": compiled,
+        "expr": expr
     }
 
 __all__ = ['compile_expression']

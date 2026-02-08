@@ -52,7 +52,7 @@ _token_re = re.compile(
         >= | <= | == | != | > | < |# Comparison operators
         \*\*          |            # power
         [+\-*/(),]                 # Operators and parentheses
-    )""",
+    )\s*""",
     re.VERBOSE
 )
 
