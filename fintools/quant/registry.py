@@ -12,26 +12,27 @@ logger = logging.getLogger(__name__)
 import polars as pl
 from scipy import stats
 from .AST import Node, Const, Call
+from .config import STRING, INTEGER, REAL
 
 class ValidationError(Exception): pass
 
 DATE_COL = "date"
 SYMBOL_COL = "symbol"
 
-DATA_SCHEMA = {
-    'symbol': pl.Utf8,
+DATA_SCHEMA: pl.Schema = pl.Schema({
+    'symbol': STRING,
     'date': pl.Date,
-    'open': pl.Float64,
-    'high': pl.Float64,
-    'low': pl.Float64,
-    'close': pl.Float16,
-    'volume': pl.Float64,
-    'amount': pl.Float64,
-    'returns': pl.Float64,
-    'vwap': pl.Float64,
-    'cap': pl.Float64,
-    'industry': pl.Utf8
-}
+    'open': REAL,
+    'high': REAL,
+    'low': REAL,
+    'close': REAL,
+    'volume': REAL,
+    'amount': REAL,
+    'returns': REAL,
+    'vwap': REAL,
+    'cap': REAL,
+    'industry': STRING
+})
 GROUP_FIELDS = {'industry'}
 
 class LLMHidden: pass
@@ -534,7 +535,7 @@ def _days_from_last_change(x: pl.Expr) -> pl.Expr:
     """
     Number of days since the last change in the value of x
     """
-    seg = (x != x.shift(-1)).fill_null(True).cum_sum()
+    seg = (x != x.shift(-1)).fill_null(True).cast(pl.Int32).cum_sum()
     pos = x.cum_count().over([seg, pl.col(SYMBOL_COL)])
     return pos.shift(1)
 
@@ -709,11 +710,11 @@ def _ts_quantile(x: pl.Expr, d: Annotated[int, 'lookback'], driver: Annotated[st
     rr = (x.rolling_rank(window_size=d, method="min", min_samples=1) - 1) / (d - 1)
     rr = 1 / d + rr * (1 - 2 / d)
     if driver == 'gaussian':
-        return x.map_batches(lambda s: pl.Series(stats.norm.ppf(s)))
+        return x.map_batches(lambda s: pl.Series(stats.norm.ppf(s))).cast(REAL)
     elif driver == 'uniform':
         return rr - rr.rolling_mean(window_size=d, min_samples=1)
     elif driver == 'cauchy':
-        return x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s)))
+        return x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s))).cast(REAL)
     else:
         raise ValidationError(f"Unknown driver {driver} for ts_quantile")
 
@@ -869,11 +870,11 @@ def _quantile(x: pl.Expr, driver: Annotated[str, 'distribution: "gaussian" / "un
     rr = (x.rank(method="min") - 1) / (x.len() - 1)
     rr = 1 / x.len() + rr * (1 - 2 / x.len())
     if driver == 'gaussian':
-        ret = x.map_batches(lambda s: pl.Series(stats.norm.ppf(s)))
+        ret = x.map_batches(lambda s: pl.Series(stats.norm.ppf(s))).cast(REAL)
     elif driver == 'uniform':
         ret = rr - rr.mean()
     elif driver == 'cauchy':
-        ret = x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s)))
+        ret = x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s))).cast(REAL)
     else:
         raise ValidationError(f"Unknown driver {driver} for quantile")
     return ret * sigma

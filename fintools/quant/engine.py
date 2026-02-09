@@ -7,6 +7,7 @@ from .validate import normalize, validate, ast_to_hash
 from .compiler import compile_expr
 from .utils import make_dataset
 from .registry import ScheduleColume, Schedule, GroupBy
+from .config import REAL, INTEGER, STRING
 from datetime import date
 
 @dataclass
@@ -27,14 +28,25 @@ class FactorRecord:
 class QuantEngine:
     def __init__(
         self,
-        test_start: date = date(2024, 1, 1)
+        test_start: date = date(2024, 1, 1),
+        fetch_new_data: bool = False,
     ):
-        dataset = make_dataset()
+        dataset = make_dataset(fetch_new=fetch_new_data)
         self.dataset = dataset
-        self.result = dataset[['date', 'symbol', 'returns']]
+        self._lazy_res_cols: List[pl.LazyFrame] = []
+        self._result = self.dataset[['date', 'symbol']]
+    
+    def result(self) -> pl.DataFrame:
+        if len(self._lazy_res_cols) == 0: return self._result
+        self._result = pl.concat([self._result.lazy(), *self._lazy_res_cols], how='horizontal', parallel=True).collect()
+        return self._result
 
-    def add(self, expressions: List[str]):
-        cols: List[pl.LazyFrame] = [self.result.lazy()]
+    def reset(self):
+        self._lazy_res_cols = []
+        self._result = self.dataset[['date', 'symbol']]
+
+    def add(self, expressions: List[str] | str):
+        if isinstance(expressions, str): expressions = [expressions]
         for expr in expressions:
             lazy_df = self.dataset.lazy()
             ast = Parser(expression=expr).parse()
@@ -42,8 +54,7 @@ class QuantEngine:
             validate(ast)
             aid = ast_to_hash(ast)
             col = self.ast_to_col(lazy_df, aid, ast)
-            cols.append(col)
-        self.result = pl.concat(cols, how='horizontal', parallel=True)
+            self._lazy_res_cols.append(col.cast(REAL))
 
     def ast_to_col(self, df: pl.LazyFrame, alias: str, ast: Node) -> pl.LazyFrame:
         extra_columns = {}
