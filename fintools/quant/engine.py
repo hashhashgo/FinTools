@@ -29,7 +29,7 @@ class QuantEngine:
     def __init__(
         self,
         test_start: date = date(2024, 1, 1),
-        fetch_new_data: bool = False,
+        fetch_new_data: bool = True,
     ):
         dataset = make_dataset(fetch_new=fetch_new_data)
         self.dataset = dataset
@@ -39,6 +39,7 @@ class QuantEngine:
     def result(self) -> pl.DataFrame:
         if len(self._lazy_res_cols) == 0: return self._result
         self._result = pl.concat([self._result.lazy(), *self._lazy_res_cols], how='horizontal', parallel=True).collect()
+        self._lazy_res_cols = []
         return self._result
 
     def reset(self):
@@ -53,10 +54,12 @@ class QuantEngine:
             ast = normalize(ast)
             validate(ast)
             aid = ast_to_hash(ast)
+            if aid in self._result.columns: continue
             col = self.ast_to_col(lazy_df, aid, ast)
-            self._lazy_res_cols.append(col.cast(REAL))
+            self._lazy_res_cols.append(col)
 
-    def ast_to_col(self, df: pl.LazyFrame, alias: str, ast: Node) -> pl.LazyFrame:
+    @classmethod
+    def ast_to_col(cls, df: pl.LazyFrame, alias: str, ast: Node) -> pl.LazyFrame:
         extra_columns = {}
         df, compiled = compile_expr(df, ast, extra_columns=extra_columns)
         if isinstance(compiled, Schedule):
@@ -65,4 +68,4 @@ class QuantEngine:
                 compiled_expr = compiled.expr.over(compiled.over.value)
         else:
             compiled_expr = pl.lit(compiled)
-        return df.select(compiled_expr.alias(alias))
+        return df.select(compiled_expr.cast(REAL).alias(alias))

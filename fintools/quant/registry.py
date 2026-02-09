@@ -282,7 +282,7 @@ def _neg(x: AnyNumerical) -> pl.Expr:
     if not isinstance(x, pl.Expr):
         return pl.lit(-x)
     else:
-        return x.neg()
+        return x.cast(REAL).neg()
 
 @quant_func
 def _add(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
@@ -535,7 +535,7 @@ def _days_from_last_change(x: pl.Expr) -> pl.Expr:
     """
     Number of days since the last change in the value of x
     """
-    seg = (x != x.shift(-1)).fill_null(True).cast(pl.Int32).cum_sum()
+    seg = (x != x.shift(-1)).fill_null(True).cast(INTEGER).cum_sum()
     pos = x.cum_count().over([seg, pl.col(SYMBOL_COL)])
     return pos.shift(1)
 
@@ -634,7 +634,7 @@ def _ts_count_nans(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     Count of NaN values in x over the past d days
     """
     if d <= 0: raise ValidationError("lookback days must > 0")
-    return x.is_nan().cast(pl.Int64).rolling_sum(window_size=d, min_samples=1)
+    return x.is_nan().cast(INTEGER).rolling_sum(window_size=d, min_samples=1)
 
 @quant_ts_func
 def _ts_cov(x: pl.Expr, y: pl.Expr, d: Annotated[int, "lookback"], ddof: Annotated[int, "delta degrees of freedom", LLMHidden] = 1) -> pl.Expr:
@@ -650,6 +650,7 @@ def _ts_decay_linear(x: pl.Expr, d: Annotated[int, "lookback"], dense: Annotated
     Returns the linear decay on x for the past d days. 
     """
     if d <= 0: raise ValidationError("lookback days must > 0")
+    x = x.cast(REAL)
     if dense:
         num = sum(
             pl.when(x.shift(i).is_not_null())
@@ -667,7 +668,7 @@ def _ts_decay_linear(x: pl.Expr, d: Annotated[int, "lookback"], dense: Annotated
         
         return cast(pl.Expr, num / den)
     else:
-        return cast(pl.Expr, sum(x.shift(i).fill_null(0) * (d - i) for i in range(d)) / (d * (d + 1) / 2))
+        return cast(pl.Expr, sum(x.shift(i).cast(REAL).fill_null(0.) * (d - i) for i in range(d)) / (d * (d + 1) / 2))
 
 @quant_ts_func
 def _ts_delay(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
@@ -890,11 +891,11 @@ def _rank(x: pl.Expr, rate: Annotated[int, '10**rate buckets'] = 2) -> pl.Expr:
     rate = int(rate)
     if rate < 0: raise ValidationError("rate must >= 0 for rank")
     if rate == 0:
-        return r1
+        return r1.cast(REAL)
     bucket_cnt = pl.lit(10 ** rate)
     bucket = (r1 * bucket_cnt).floor()
     r2 = (bucket.rank(method='min') - 1) / (n - 1)
-    return r2
+    return r2.cast(REAL)
 
 @quant_cs_func
 def _scale(x: pl.Expr, scale: Annotated[float, 'scale for all'] = 1.0, longscale: Annotated[float, 'scale for long position'] = 1.0, shortscale: Annotated[float, 'scale for short position'] = 1.0) -> pl.Expr:

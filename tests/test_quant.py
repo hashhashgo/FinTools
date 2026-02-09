@@ -79,6 +79,10 @@ if __name__ == "__main__":
     import os
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
+    from fintools.quant.engine import QuantEngine
+    engine = QuantEngine()
+    engine.add("(min(ts_rank(ts_decay_linear(((((high + low) / 2) + close) < (low + open)), 15), 19), ts_rank(ts_decay_linear(ts_corr(rank(low), rank(ts_mean(amount, 30)), 8), 7), 7)))")
+    engine.result()
     # test_fetch_everything()
     # test_compile_expression(raise_if_error=False)
     # print("All tests passed.")
