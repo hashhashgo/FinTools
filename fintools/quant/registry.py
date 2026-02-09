@@ -551,7 +551,7 @@ def _kth_element(x: pl.Expr, d: Annotated[int, "lookback"], k: Annotated[int, "k
     else:
         return x.fill_null(strategy="forward", limit=d - 1)
 
-@quant_ts_func
+@quant_eager_func
 def _last_diff_value(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Returns last x value not equal to current x value from last d days
@@ -561,7 +561,7 @@ def _last_diff_value(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     idx = pl.col("date").cum_count().reverse()
     idx_diff = pl.min_horizontal(pl.when(x.shift(i) != x).then(idx + i).otherwise(None) for i in range(1, d))
     v_diff = pl.min_horizontal(pl.when(idx.shift(i) == idx_diff).then(x.shift(i)).otherwise(None) for i in range(1, d))
-    return v_diff
+    return v_diff.over(SYMBOL_COL)
 
 @quant_ts_func
 def _ts_min(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
@@ -579,7 +579,7 @@ def _ts_max(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     if d <= 0: raise ValidationError("lookback days must > 0")
     return x.rolling_max(window_size=d, min_samples=1)
 
-@quant_ts_func
+@quant_eager_func
 def _ts_argmax(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Returns the relative index of the max value in the time series for the past d days.
@@ -589,9 +589,9 @@ def _ts_argmax(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     idx = pl.col("date").cum_count().reverse()
     maxv = x.rolling_max(window_size=d, min_samples=1)
     last_max_idx = pl.min_horizontal(pl.when(x.shift(i) == maxv).then(idx + i).otherwise(None) for i in range(d))
-    return (last_max_idx - idx)
+    return (last_max_idx - idx).over(SYMBOL_COL)
 
-@quant_ts_func
+@quant_eager_func
 def _ts_argmin(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Returns the relative index of the min value in the time series for the past d days.
@@ -601,7 +601,7 @@ def _ts_argmin(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     idx = pl.col("date").cum_count().reverse()
     minv = x.rolling_min(window_size=d, min_samples=1)
     last_min_idx = pl.min_horizontal(pl.when(x.shift(i) == minv).then(idx + i).otherwise(None) for i in range(d))
-    return (last_min_idx - idx)
+    return (last_min_idx - idx).over(SYMBOL_COL)
 
 @quant_ts_func
 def _ts_av_diff(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
@@ -644,7 +644,7 @@ def _ts_cov(x: pl.Expr, y: pl.Expr, d: Annotated[int, "lookback"], ddof: Annotat
     if d <= 0: raise ValidationError("lookback days must > 0")
     return pl.rolling_cov(x, y, window_size=d, min_samples=2, ddof=ddof)
 
-@quant_ts_func
+@quant_eager_func
 def _ts_decay_linear(x: pl.Expr, d: Annotated[int, "lookback"], dense: Annotated[bool, "dense=false means operator works in sparse mode and we treat NaN as 0. In dense mode we ignore NaN."] = False) -> pl.Expr:
     """
     Returns the linear decay on x for the past d days. 
@@ -666,9 +666,10 @@ def _ts_decay_linear(x: pl.Expr, d: Annotated[int, "lookback"], dense: Annotated
             for i in range(d)
         )
         
-        return cast(pl.Expr, num / den)
+        ret = cast(pl.Expr, num / den)
     else:
-        return cast(pl.Expr, sum(x.shift(i).cast(REAL).fill_null(0.) * (d - i) for i in range(d)) / (d * (d + 1) / 2))
+        ret = cast(pl.Expr, sum(x.shift(i).cast(REAL).fill_null(0.) * (d - i) for i in range(d)) / (d * (d + 1) / 2))
+    return ret.over(SYMBOL_COL)
 
 @quant_ts_func
 def _ts_delay(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
