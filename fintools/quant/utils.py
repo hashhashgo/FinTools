@@ -181,11 +181,12 @@ def fetch_everything():
     return df_stock.join(df_daily_basic, on=['ts_code', 'date'], how='left')
 
 def make_dataset():
-    from .registry import FIELDS
+    from .registry import DATA_SCHEMA
     df = fetch_everything()
     df = df.rename({"circ_mv": "cap", "ts_code": "symbol"})
     df = df.with_columns(
         (pl.col("amount") / pl.col("volume")).alias("vwap"),
+        pl.col('date').dt.date().alias('date')
     )
     df = df.sort(by=['symbol', 'date'], descending=[False, False])
-    return df.select(FIELDS)
+    return df.select(DATA_SCHEMA)

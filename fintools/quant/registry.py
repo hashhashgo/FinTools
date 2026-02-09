@@ -3,6 +3,7 @@ from __future__ import annotations
 from ast import expr
 from dataclasses import dataclass
 from typing import Callable, Dict, Tuple, List, cast, get_type_hints, get_args, get_origin, Annotated, TypeAlias
+from enum import Enum
 import inspect
 from functools import wraps
 import logging
@@ -17,7 +18,20 @@ class ValidationError(Exception): pass
 DATE_COL = "date"
 SYMBOL_COL = "symbol"
 
-FIELDS = {'symbol', 'date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'returns', 'vwap', 'cap', 'industry'}
+DATA_SCHEMA = {
+    'symbol': pl.Utf8,
+    'date': pl.Date,
+    'open': pl.Float64,
+    'high': pl.Float64,
+    'low': pl.Float64,
+    'close': pl.Float16,
+    'volume': pl.Float64,
+    'amount': pl.Float64,
+    'returns': pl.Float64,
+    'vwap': pl.Float64,
+    'cap': pl.Float64,
+    'industry': pl.Utf8
+}
 GROUP_FIELDS = {'industry'}
 
 class LLMHidden: pass
@@ -29,14 +43,16 @@ class OpSpec:
     max_arity: int
     field_type: Tuple[type, ...]
     normalize: Callable[[Tuple[Node, ...]], Tuple[Node, ...]]
-    func: Callable[..., pl.Expr]
+    func: ScheduleFunc | None
     hint_func_doc: str
     hint_func_sig: str
     hint_params: List[str]
 
 OPS: Dict[str, OpSpec] = {}
 
-Anything: TypeAlias = pl.Expr | float | int | bool
+AnyNumerical: TypeAlias = pl.Expr | float | int | bool
+AnyConstant: TypeAlias = float | int | bool | str
+AnyInput: TypeAlias = pl.Expr | AnyConstant
 VALIDATABLE_TYPES = {int, float, str, bool}
 def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
     sig = inspect.signature(func)
@@ -108,7 +124,7 @@ def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
         max_arity=max_arity,
         field_type=field_type,
         normalize=norm_args,
-        func=func,
+        func=None,
         hint_func_doc='\n'.join([l.strip() for l in (func.__doc__ or "").splitlines() if l.strip()]),
         hint_func_sig=func_sig,
         hint_params=hint_params
@@ -132,29 +148,111 @@ TS_FUNC = []
 CS_FUNC = []
 GROUP_FUNC = []
 
-def quant_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
-    NORMAL_FUNC.append(func.__name__.strip('_'))
-    return register_func(func)
+class GroupBy(Enum):
+    OVERSYMBOL = SYMBOL_COL
+    OVERDATE = DATE_COL
+    NONE = 'none'
 
-def quant_ts_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
-    TS_FUNC.append(func.__name__.strip('_'))
-    @wraps(register_func(func))
-    def wrapper(*args) -> pl.Expr:
-        result = func(*args)
-        return result.over(pl.col("symbol"))
+@dataclass(frozen = True)
+class Schedule:
+    expr: pl.Expr
+    aid: str
+    over: GroupBy
+
+@dataclass(frozen=True)
+class ScheduleColume:
+    col: pl.Expr
+    aid: str
+
+ScheduleFunc: TypeAlias = Callable[[str, pl.LazyFrame, Dict[str, ScheduleColume], AnyConstant | Schedule], Tuple[pl.LazyFrame, Schedule]]
+
+def make_schedule_func(func: Callable[..., pl.Expr], over: GroupBy, eager: bool) -> ScheduleFunc:
+    @wraps(func)
+    def wrapper(aid: str, df: pl.LazyFrame, memory: Dict[str, ScheduleColume], *args: Schedule | AnyConstant) -> Tuple[pl.LazyFrame, Schedule]:
+        nonlocal over
+        arg_expr: List[AnyInput] = []
+        for arg in args:
+            if isinstance(arg, Schedule):
+                if arg.aid in memory:
+                    expr = memory[arg.aid].col
+                elif arg.over == GroupBy.NONE:
+                    expr = arg.expr
+                else:
+                    if over == GroupBy.NONE or (over == arg.over and not eager): 
+                        over = arg.over
+                        expr = arg.expr
+                    else:
+                        df = df.with_columns(
+                            arg.expr.over(arg.over.value).alias(arg.aid)
+                        )
+                        expr = pl.col(arg.aid)
+                        memory[arg.aid] = ScheduleColume(
+                            col = expr,
+                            aid = arg.aid
+                        )
+            else:
+                expr = arg
+            arg_expr.append(expr)
+        output = func(*arg_expr)
+        if eager:
+            if over != GroupBy.NONE:
+                output = output.over(over.value)
+                over = GroupBy.NONE
+            df = df.with_columns(
+                output.alias(aid)
+            )
+            output = pl.col(aid)
+            memory[aid] = ScheduleColume(
+                col = output,
+                aid = aid
+            )
+        return df, Schedule(
+            expr = output,
+            aid = aid,
+            over = over
+        )
+    
     return wrapper
 
-def quant_cs_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
-    CS_FUNC.append(func.__name__.strip('_'))
-    @wraps(register_func(func))
-    def wrapper(*args) -> pl.Expr:
-        result = func(*args)
-        return result.over(pl.col("date"))
+def quant_func(func: Callable[..., pl.Expr]) -> ScheduleFunc:
+    name = func.__name__.strip('_')
+    NORMAL_FUNC.append(name)
+    func = register_func(func)
+
+    wrapper = make_schedule_func(func=func, over=GroupBy.NONE, eager=False)
+
+    OPS[name].func = wrapper
     return wrapper
 
-def quant_group_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
-    GROUP_FUNC.append(func.__name__.strip('_'))
-    return register_func(func)
+def quant_ts_func(func: Callable[..., pl.Expr]) -> ScheduleFunc:
+    name = func.__name__.strip('_')
+    TS_FUNC.append(name)
+    func = register_func(func)
+
+    wrapper = make_schedule_func(func=func, over=GroupBy.OVERSYMBOL, eager=False)
+
+    OPS[name].func = wrapper
+    return wrapper
+
+def quant_cs_func(func: Callable[..., pl.Expr]) -> ScheduleFunc:
+    name = func.__name__.strip('_')
+    CS_FUNC.append(name)
+    func = register_func(func)
+
+    wrapper = make_schedule_func(func=func, over=GroupBy.OVERDATE, eager=False)
+
+    OPS[name].func = wrapper
+    return wrapper
+
+def quant_eager_func(func: Callable[..., pl.Expr]) -> ScheduleFunc:
+    name = func.__name__.strip('_')
+    GROUP_FUNC.append(name)
+    func = register_func(func)
+
+    wrapper = make_schedule_func(func=func, over=GroupBy.NONE, eager=True)
+
+    OPS[name].func = wrapper
+    return wrapper
 
 ################ Arithmetic Operators ################
 @quant_func
@@ -166,7 +264,7 @@ def _densify(x: pl.Expr) -> pl.Expr:
     return x.rank(method="dense")
 
 @quant_func
-def _abs(x: Anything) -> pl.Expr:
+def _abs(x: AnyNumerical) -> pl.Expr:
     """
     Absolute value of x
     """
@@ -176,7 +274,7 @@ def _abs(x: Anything) -> pl.Expr:
         return x.abs()
 
 @quant_func
-def _neg(x: Anything) -> pl.Expr:
+def _neg(x: AnyNumerical) -> pl.Expr:
     """
     Equivalent of unary minus operator -x
     """
@@ -186,7 +284,7 @@ def _neg(x: Anything) -> pl.Expr:
         return x.neg()
 
 @quant_func
-def _add(x: Anything, y: Anything) -> pl.Expr:
+def _add(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of binary addition operator x + y
     """
@@ -200,7 +298,7 @@ def _add(x: Anything, y: Anything) -> pl.Expr:
         return x + y
 
 @quant_func
-def _sub(x: Anything, y: Anything) -> pl.Expr:
+def _sub(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of binary subtraction operator x - y
     """
@@ -214,7 +312,7 @@ def _sub(x: Anything, y: Anything) -> pl.Expr:
         return x - y
 
 @quant_func
-def _mul(x: Anything, y: Anything) -> pl.Expr:
+def _mul(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of binary multiplication operator x * y
     """
@@ -228,7 +326,7 @@ def _mul(x: Anything, y: Anything) -> pl.Expr:
         return x * y
 
 @quant_func
-def _div(x: Anything, y: Anything) -> pl.Expr:
+def _div(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of binary division operator x / y
     """
@@ -242,7 +340,7 @@ def _div(x: Anything, y: Anything) -> pl.Expr:
         return x / y
 
 @quant_func
-def _pow(x: Anything, y: Anything) -> pl.Expr:
+def _pow(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of binary exponentiation operator x ** y
     """
@@ -256,7 +354,7 @@ def _pow(x: Anything, y: Anything) -> pl.Expr:
         return x ** y
 
 @quant_func
-def _log(x: Anything) -> pl.Expr:
+def _log(x: AnyNumerical) -> pl.Expr:
     """
     natural logarithm
     """
@@ -266,21 +364,21 @@ def _log(x: Anything) -> pl.Expr:
         return x.log()
 
 @quant_func
-def _max(*args: Anything) -> pl.Expr:
+def _max(*args: AnyNumerical) -> pl.Expr:
     """
     Maximum value among the arguments
     """
     return pl.max_horizontal(*args)
 
 @quant_func
-def _min(*args: Anything) -> pl.Expr:
+def _min(*args: AnyNumerical) -> pl.Expr:
     """
     Minimum value among the arguments
     """
     return pl.min_horizontal(*args)
 
 @quant_func
-def _sign(x: Anything) -> pl.Expr:
+def _sign(x: AnyNumerical) -> pl.Expr:
     """
     Sign of x
     * -1 if x < 0.
@@ -293,7 +391,7 @@ def _sign(x: Anything) -> pl.Expr:
         return x.sign()
 
 @quant_func
-def _signed_pow(x: Anything, y: Anything) -> pl.Expr:
+def _signed_pow(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Signed power function
     Computes x raised to the power of y, preserving the sign of x.
@@ -305,7 +403,7 @@ def _signed_pow(x: Anything, y: Anything) -> pl.Expr:
     return pl.when(x >= 0).then(x ** y).otherwise(-( (-x) ** y))
 
 @quant_func
-def _sqrt(x: Anything) -> pl.Expr:
+def _sqrt(x: AnyNumerical) -> pl.Expr:
     """
     Square root of x
     """
@@ -315,7 +413,7 @@ def _sqrt(x: Anything) -> pl.Expr:
 
 # ################ Logical Operators ################
 @quant_func
-def _and(x: Anything, y: Anything) -> pl.Expr:
+def _and(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Logical AND operation between x and y
     """
@@ -326,7 +424,7 @@ def _and(x: Anything, y: Anything) -> pl.Expr:
     return x.cast(pl.Boolean) & y.cast(pl.Boolean)
 
 @quant_func
-def _or(x: Anything, y: Anything) -> pl.Expr:
+def _or(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Logical OR operation between x and y
     """
@@ -337,7 +435,7 @@ def _or(x: Anything, y: Anything) -> pl.Expr:
     return x.cast(pl.Boolean) | y.cast(pl.Boolean)
 
 @quant_func
-def _not(x: Anything) -> pl.Expr:
+def _not(x: AnyNumerical) -> pl.Expr:
     """
     Logical NOT operation on x
     """
@@ -346,7 +444,7 @@ def _not(x: Anything) -> pl.Expr:
     return ~x.cast(pl.Boolean)
 
 @quant_func
-def _where(cond: Anything, x: Anything, y: Anything) -> pl.Expr:
+def _where(cond: AnyNumerical, x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Conditional selection
     Returns x where cond is true, and y otherwise.
@@ -356,7 +454,7 @@ def _where(cond: Anything, x: Anything, y: Anything) -> pl.Expr:
     return pl.when(cond.cast(pl.Boolean)).then(x).otherwise(y)
 
 @quant_func
-def _gt(x: Anything, y: Anything) -> pl.Expr:
+def _gt(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of greater-than operator x > y
     """
@@ -367,7 +465,7 @@ def _gt(x: Anything, y: Anything) -> pl.Expr:
     return x > y
 
 @quant_func
-def _lt(x: Anything, y: Anything) -> pl.Expr:
+def _lt(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of less-than operator x < y
     """
@@ -378,7 +476,7 @@ def _lt(x: Anything, y: Anything) -> pl.Expr:
     return x < y
 
 @quant_func
-def _ge(x: Anything, y: Anything) -> pl.Expr:
+def _ge(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of greater-than-or-equal-to operator x >= y
     """
@@ -389,7 +487,7 @@ def _ge(x: Anything, y: Anything) -> pl.Expr:
     return x >= y
 
 @quant_func
-def _le(x: Anything, y: Anything) -> pl.Expr:
+def _le(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of less-than-or-equal-to operator x <= y
     """
@@ -400,7 +498,7 @@ def _le(x: Anything, y: Anything) -> pl.Expr:
     return x <= y
 
 @quant_func
-def _eq(x: Anything, y: Anything) -> pl.Expr:
+def _eq(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of equality operator x == y
     """
@@ -411,7 +509,7 @@ def _eq(x: Anything, y: Anything) -> pl.Expr:
     return x == y
 
 @quant_func
-def _ne(x: Anything, y: Anything) -> pl.Expr:
+def _ne(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
     """
     Equivalent of not-equal-to operator x != y
     """
@@ -422,7 +520,7 @@ def _ne(x: Anything, y: Anything) -> pl.Expr:
     return x != y
 
 @quant_func
-def _is_nan(x: Anything) -> pl.Expr:
+def _is_nan(x: AnyNumerical) -> pl.Expr:
     """
     Check if x is NaN
     """
@@ -431,13 +529,13 @@ def _is_nan(x: Anything) -> pl.Expr:
     return x.is_nan()
 
 # ################ Time Series Operators ################
-@quant_func
+@quant_eager_func
 def _days_from_last_change(x: pl.Expr) -> pl.Expr:
     """
     Number of days since the last change in the value of x
     """
     seg = (x != x.shift(-1)).fill_null(True).cum_sum()
-    pos = x.cum_count().over([seg, pl.col('symbol')])
+    pos = x.cum_count().over([seg, pl.col(SYMBOL_COL)])
     return pos.shift(1)
 
 @quant_ts_func
@@ -446,6 +544,7 @@ def _kth_element(x: pl.Expr, d: Annotated[int, "lookback"], k: Annotated[int, "k
     Returns K-th valid value of input by looking through lookback days.
     This operator can be used to backfill missing data if k=1.
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     if k > 1:
         return x.reverse().drop_nulls().get(k - 1).rolling(index_column="date", period=f"{d}d")
     else:
@@ -457,6 +556,7 @@ def _last_diff_value(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     Returns last x value not equal to current x value from last d days
     **This operator is slow**
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     idx = pl.col("date").cum_count().reverse()
     idx_diff = pl.min_horizontal(pl.when(x.shift(i) != x).then(idx + i).otherwise(None) for i in range(1, d))
     v_diff = pl.min_horizontal(pl.when(idx.shift(i) == idx_diff).then(x.shift(i)).otherwise(None) for i in range(1, d))
@@ -467,6 +567,7 @@ def _ts_min(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Minimum value of x over the past d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.rolling_min(window_size=d, min_samples=1)
 
 @quant_ts_func
@@ -474,6 +575,7 @@ def _ts_max(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Maximum value of x over the past d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.rolling_max(window_size=d, min_samples=1)
 
 @quant_ts_func
@@ -482,6 +584,7 @@ def _ts_argmax(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     Returns the relative index of the max value in the time series for the past d days.
     If the current day has the max value for the past d days, it returns 0.
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     idx = pl.col("date").cum_count().reverse()
     maxv = x.rolling_max(window_size=d, min_samples=1)
     last_max_idx = pl.min_horizontal(pl.when(x.shift(i) == maxv).then(idx + i).otherwise(None) for i in range(d))
@@ -493,6 +596,7 @@ def _ts_argmin(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     Returns the relative index of the min value in the time series for the past d days.
     If the current day has the min value for the past d days, it returns 0.
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     idx = pl.col("date").cum_count().reverse()
     minv = x.rolling_min(window_size=d, min_samples=1)
     last_min_idx = pl.min_horizontal(pl.when(x.shift(i) == minv).then(idx + i).otherwise(None) for i in range(d))
@@ -504,6 +608,7 @@ def _ts_av_diff(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     Returns x - tsmean(x, d), but deals with NaNs carefully.
     That is NaNs are ignored during mean computation.
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x - x.rolling_mean(window_size=d, min_samples=1)
 
 @quant_ts_func
@@ -511,6 +616,7 @@ def _ts_backfill(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Backfill missing values in x by looking back through the past d days.
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.fill_null(strategy="forward", limit=d - 1)
 
 @quant_ts_func
@@ -518,29 +624,15 @@ def _ts_corr(x: pl.Expr, y: pl.Expr, d: Annotated[int, "lookback"], ddof: Annota
     """
     Pearson correlation coefficient between x and y over the past d days
     """
-    x = pl.when(x.is_nan()).then(None).otherwise(x)
-    y = pl.when(y.is_nan()).then(None).otherwise(y)
-
-    ex  = x.rolling_mean(window_size=d, min_samples=1)
-    ey  = y.rolling_mean(window_size=d, min_samples=1)
-    exy = (x * y).rolling_mean(window_size=d, min_samples=1)
-    n = (x.is_not_null() & y.is_not_null()).cast(pl.Int32).rolling_sum(window_size=d, min_samples=1)
-
-    cov = (exy - ex * ey) * (n / (n - pl.lit(ddof)))
-    
-    ex2 = (x * x).rolling_mean(window_size=d, min_samples=1)
-    ey2 = (y * y).rolling_mean(window_size=d, min_samples=1)
-
-    varx = (ex2 - ex * ex) * (n / (n - pl.lit(ddof)))
-    vary = (ey2 - ey * ey) * (n / (n - pl.lit(ddof)))
-
-    return cov / (varx.sqrt() * vary.sqrt())
+    if d <= 0: raise ValidationError("lookback days must > 0")
+    return pl.rolling_corr(x, y, window_size=d, min_samples=2, ddof=ddof)
 
 @quant_ts_func
 def _ts_count_nans(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Count of NaN values in x over the past d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.is_nan().cast(pl.Int64).rolling_sum(window_size=d, min_samples=1)
 
 @quant_ts_func
@@ -548,18 +640,15 @@ def _ts_cov(x: pl.Expr, y: pl.Expr, d: Annotated[int, "lookback"], ddof: Annotat
     """
     Covariance between x and y over the past d days
     """
-    ex = x.rolling_mean(window_size=d, min_samples=1)
-    ey = y.rolling_mean(window_size=d, min_samples=1)
-    exy = (x * y).rolling_mean(window_size=d, min_samples=1)
-    n = (x.is_not_null() & y.is_not_null()).cast(pl.Int32).rolling_sum(window_size=d, min_samples=1)
-    return (exy - ex * ey) * n / (n - ddof)
+    if d <= 0: raise ValidationError("lookback days must > 0")
+    return pl.rolling_cov(x, y, window_size=d, min_samples=2, ddof=ddof)
 
 @quant_ts_func
 def _ts_decay_linear(x: pl.Expr, d: Annotated[int, "lookback"], dense: Annotated[bool, "dense=false means operator works in sparse mode and we treat NaN as 0. In dense mode we ignore NaN."] = False) -> pl.Expr:
     """
     Returns the linear decay on x for the past d days. 
     """
-    assert d > 0, "Lookback period d must be positive."
+    if d <= 0: raise ValidationError("lookback days must > 0")
     if dense:
         num = sum(
             pl.when(x.shift(i).is_not_null())
@@ -584,6 +673,7 @@ def _ts_delay(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Delay the time series x by d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.shift(d)
 
 @quant_ts_func
@@ -591,6 +681,7 @@ def _ts_delta(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Difference between current x and x d days ago
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x - x.shift(d)
 
 @quant_ts_func
@@ -598,6 +689,7 @@ def _ts_mean(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
     """
     Mean of x over the past d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.rolling_mean(window_size=d, min_samples=1)
 
 @quant_ts_func
@@ -605,6 +697,7 @@ def _ts_product(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
     """
     Product of x over the past d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.log().rolling_sum(window_size=d, min_samples=1).exp()
 
 @quant_ts_func
@@ -612,6 +705,7 @@ def _ts_quantile(x: pl.Expr, d: Annotated[int, 'lookback'], driver: Annotated[st
     """
     It calculates ts_rank and apply to its value an inverse cumulative density function from driver distribution.
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     rr = (x.rolling_rank(window_size=d, method="min", min_samples=1) - 1) / (d - 1)
     rr = 1 / d + rr * (1 - 2 / d)
     if driver == 'gaussian':
@@ -628,6 +722,7 @@ def _ts_rank(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[floa
     """
     Rank of x over the past d days, normalized to [0, 1], then return the rank of the current value + constant.
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return (x.rolling_rank(window_size=d, method="min", min_samples=1) - 1) / (d - 1) + pl.lit(constant)
 
 @quant_ts_func
@@ -647,6 +742,8 @@ def _ts_regression(y: pl.Expr, x: pl.Expr, d: Annotated[int, 'lookback'], lag: A
     - 8: Standard Error of β
     - 9: Standard Error of α
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
+    if lag < 0: raise ValidationError("lag must >= 0")
     lag = int(lag)
     rettype = int(rettype)
 
@@ -713,6 +810,7 @@ def _ts_scale(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[flo
     """
     Scale x over the past d days to the range [0, 1] + constant.
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     minx = x.rolling_max(window_size=d, min_samples=1)
     maxx = x.rolling_min(window_size=d, min_samples=1)
     return (x - minx) / (maxx - minx) + constant
@@ -722,6 +820,7 @@ def _ts_stddev(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
     """
     Standard deviation of x over the past d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.rolling_std(window_size=d, min_samples=1)
 
 @quant_ts_func
@@ -736,6 +835,7 @@ def _ts_sum(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
     """
     Sum of x over the past d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return x.rolling_sum(window_size=d, min_samples=1)
 
 @quant_ts_func
@@ -743,6 +843,7 @@ def _ts_zscore(x: pl.Expr, d: Annotated[int, 'lookback']) -> pl.Expr:
     """
     Z-score normalization of x over the past d days
     """
+    if d <= 0: raise ValidationError("lookback days must > 0")
     return (x - x.rolling_mean(window_size=d, min_samples=1)) / x.rolling_std(window_size=d, min_samples=1)
 
 # ################ Cross-sectional Operators ################
@@ -830,54 +931,45 @@ def _zscore(x: pl.Expr) -> pl.Expr:
     return (x - x.mean()) / x.std(ddof=0)
 
 # ################ Group Operators ################
-# @quant_group_func
-# def _group_backfill(x: pl.Expr, group: Annotated[str, 'group by'], d: Annotated[int, 'lookback'], std: Annotated[float, 'multiple of std'] = 4.0) -> pl.Expr:
-#     if group not in GROUP_FIELDS:
-#         raise ValidationError("Supported group: " + ', '.join(GROUP_FIELDS))
-#     d = int(d)
-#     if d < 0: raise ValidationError("lookback days must > 0")
-#     meanx = x.mean()
-#     stdx = x.std(ddof=1)
-#     lower = (meanx - std * stdx)
-#     upper = (meanx + std * stdx)
-#     return pl.when(x.is_not_null()).then(x.clip(lower_bound=lower, upper_bound=upper)).otherwise(meanx) \
-#           .rolling(index_column=DATE_COL, period=f"{d}d").over(group)
-
-@quant_group_func
+@quant_eager_func
 def _group_mean(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     """
     Mean of x within each group for each date
     """
-    if group not in FIELDS: raise ValidationError(f"Cannot group by {group}")
+    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     return x.mean().over([DATE_COL, group])
 
-@quant_group_func
+@quant_eager_func
 def _group_neutralize(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     """
     Neutralize x within each group for each date by subtracting the group mean and dividing by the group standard deviation.
     """
+    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     ret = (x - x.mean()) / x.std(ddof=0)
     return ret.over([DATE_COL, group])
 
-@quant_group_func
+@quant_eager_func
 def _group_rank(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     """
     Rank of x within each group for each date, normalized to [0, 1]
     """
+    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     return ((x.rank(method='min') - 1) / (x.len() - 1)).over([DATE_COL, group])
 
-@quant_group_func
+@quant_eager_func
 def _group_scale(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     """
     Scale x within each group for each date to the range [0, 1]
     """
+    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     minx = x.min()
     maxx = x.max()
     return ((x - minx) / (maxx - minx)).over([DATE_COL, group])
 
-@quant_group_func
+@quant_eager_func
 def _group_zscore(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     """
     Z-score normalization of x within each group for each date
     """
+    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     return ((x - x.mean()) / x.std(ddof=0)).over([DATE_COL, group])

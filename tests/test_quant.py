@@ -15,11 +15,14 @@ def test_fetch_everything():
     assert 'ts_code' in df_stocks.columns
 
 def test_compile_expression(pre_hash: list[str] = [], raise_if_error=True):
-    from fintools.quant.engine import compile_expression
-    from fintools.quant.parser import ParserError
-    from fintools.quant.validate import ValidationError
-    from fintools.quant.compiler import CompileError
+    from fintools.quant.parser import ParserError, Parser
+    from fintools.quant.validate import ValidationError, validate, normalize, ast_to_hash
+    from fintools.quant.compiler import CompileError, compile_expr
+    from fintools.quant.registry import DATA_SCHEMA
+    import polars as pl
     import hashlib
+
+    df = pl.DataFrame(schema=DATA_SCHEMA)
 
     with open("tests/alpha101.txt", "r") as f:
         lines = f.readlines()
@@ -33,16 +36,18 @@ def test_compile_expression(pre_hash: list[str] = [], raise_if_error=True):
 
         total = 0
         passed = 0
+        memo = {}
         for i, each in enumerate(lines):
             each = each.strip()
             total += 1
             try:
-                result = compile_expression(each)
+                ast = Parser(expression=each).parse()
+                ast = normalize(ast)
+                validate(ast)
+                hashed = ast_to_hash(ast)
+                ldf = df.lazy()
+                compile_expr(ldf, ast, extra_columns=memo)
                 passed += 1
-
-                assert 'ast' in result
-                assert 'aid' in result
-                assert result['aid'] is not None
             
             except ParserError as pe:
                 if raise_if_error:

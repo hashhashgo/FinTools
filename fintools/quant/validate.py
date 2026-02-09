@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json, hashlib
 from .AST import Node, Field, Const, Call
-from .registry import OPS, FIELDS, ValidationError
+from .registry import OPS, DATA_SCHEMA, ValidationError
 
 MAX_NODES = 200
 MAX_DEPTH = 30
@@ -66,7 +66,7 @@ def validate(node: Node, depth = 0, allow_float_for_int=False) -> int:
             else:
                 raise ValidationError(f"Unsupported field type in operator spec: {dtype}")
     elif isinstance(node, Field):
-        if node.name not in FIELDS:
+        if node.name not in DATA_SCHEMA:
             raise ValidationError(f"Unknown field: {node.name}")
     elif isinstance(node, Const):
         pass
