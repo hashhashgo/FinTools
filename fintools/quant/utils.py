@@ -23,16 +23,14 @@ def _fetch_all_stock_deep(df: pl.DataFrame, last_trade_date = datetime.now(ZoneI
     df_stocks = []
     underlyings = stock_basic()['ts_code'].unique()
     last_trade_dates = dict(zip(*df.group_by('ts_code').agg(pl.col('date').max())))
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(lambda u=underlying: get_data(
             datasource = "tushare",
             symbol = u,
             type = UnderlyingType.STOCK,
             freq = DataFrequency.DAILY,
-            start = last_trade_dates.get(u, 0),
-            end = last_trade_date,
             only_standard_columns=False
-        )) : underlying for underlying in underlyings}
+        )) : underlying for underlying in underlyings if last_trade_dates.get(underlying, datetime(1970,1,1, tzinfo=ZoneInfo("Asia/Shanghai"))) < last_trade_date}
 
         t = tqdm.tqdm(as_completed(futures), total=len(futures), desc="Fetching stock data")
         policy = GLOBAL_REGISTRY._resolve_endpoint_policy("tushare", "daily")
@@ -46,7 +44,7 @@ def _fetch_all_stock_deep(df: pl.DataFrame, last_trade_date = datetime.now(ZoneI
     
     return pl.concat(df_stocks, how="vertical")
 
-def _fetch_all_stock_shallow(last_trade_date = datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=10)) -> pl.DataFrame:
+def _fetch_all_stock_shallow(last_trade_date) -> pl.DataFrame:
     df_stocks = []
     offset = 0
     with ThreadPoolExecutor(max_workers=10) as executor:
