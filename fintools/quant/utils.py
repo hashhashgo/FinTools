@@ -164,9 +164,10 @@ def fetch_daily_basic(fetch_new: bool = True) -> pl.DataFrame:
                     df = df.rename(columns={'trade_date': 'date'})
                     df['date'] = pd.to_datetime(df['date'], format="%Y%m%d").dt.as_unit("ns").dt.tz_localize("Asia/Shanghai")
                     if not df.empty:
-                        df_stocks.append(pl.from_pandas(df))
+                        df_stocks.append(df)
                     t.postfix = f"Remaining: {GLOBAL_REGISTRY.backend.limiter.get_window_stats(item, 'tushare:daily_basic').remaining} / {policy.max_calls}"
-            data = pl.concat(df_stocks, how="vertical")
+            data = pd.concat(df_stocks)
+            data = pl.from_pandas(data)
 
     data = data.unique(subset=['ts_code', 'date'])
 

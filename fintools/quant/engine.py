@@ -9,6 +9,8 @@ from .utils import make_dataset
 from .registry import ScheduleColume, Schedule, GroupBy
 from .config import REAL, INTEGER, STRING
 from datetime import date
+from pathlib import Path
+import tqdm
 
 @dataclass
 class FactorRecord:
@@ -29,22 +31,26 @@ class QuantEngine:
     def __init__(
         self,
         test_start: date = date(2024, 1, 1),
+        values_cache: Path | None = Path("./results/alpha_values.parquet"),
         fetch_new_data: bool = True,
     ):
         dataset = make_dataset(fetch_new=fetch_new_data)
         self.dataset = dataset
         self._lazy_res_cols: List[pl.LazyFrame] = []
         self._result = self.dataset[['date', 'symbol']]
+        self.values_cache = values_cache
+        if values_cache is not None and values_cache.exists():
+            self._result = pl.read_parquet(values_cache)
     
-    def result(self) -> pl.DataFrame:
+    def result(self, max_parallel: int = 10) -> pl.DataFrame:
         if len(self._lazy_res_cols) == 0: return self._result
-        self._result = pl.concat([self._result.lazy(), *self._lazy_res_cols], how='horizontal', parallel=True).collect()
+        for i in tqdm.trange(0, len(self._lazy_res_cols), max_parallel):
+            self._result = pl.concat([self._result.lazy(), *self._lazy_res_cols[i:i+max_parallel]], how='horizontal', parallel=True).collect()
         self._lazy_res_cols = []
+        if self.values_cache is not None:
+            self.values_cache.parent.mkdir(parents=True, exist_ok=True)
+            self._result.write_parquet(self.values_cache)
         return self._result
-
-    def reset(self):
-        self._lazy_res_cols = []
-        self._result = self.dataset[['date', 'symbol']]
 
     def add(self, expressions: List[str] | str):
         if isinstance(expressions, str): expressions = [expressions]

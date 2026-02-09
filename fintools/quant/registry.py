@@ -179,7 +179,8 @@ def make_schedule_func(func: Callable[..., pl.Expr], over: GroupBy, eager: bool)
                 elif arg.over == GroupBy.NONE:
                     expr = arg.expr
                 else:
-                    if over == GroupBy.NONE or (over == arg.over and not eager): 
+                    if not eager and (over == GroupBy.NONE or over == arg.over) \
+                    or     eager and (arg.over == GroupBy.NONE):
                         over = arg.over
                         expr = arg.expr
                     else:
@@ -668,7 +669,7 @@ def _ts_decay_linear(x: pl.Expr, d: Annotated[int, "lookback"], dense: Annotated
         
         ret = cast(pl.Expr, num / den)
     else:
-        ret = cast(pl.Expr, sum(x.shift(i).cast(REAL).fill_null(0.) * (d - i) for i in range(d)) / (d * (d + 1) / 2))
+        ret = cast(pl.Expr, sum(x.shift(i).fill_null(0.) * (d - i) for i in range(d)) / (d * (d + 1) / 2))
     return ret.over(SYMBOL_COL)
 
 @quant_ts_func
@@ -858,7 +859,7 @@ def _normalize(x: pl.Expr, useStd: Annotated[bool, 'divide standard deviation or
     """
     ret = x - x.mean()
     if useStd:
-        ret = ret / x.std(ddof=0)
+        ret = pl.when(x.len() == 1).then(0.0).otherwise(ret / x.std(ddof=0))
     if abs(limit) > 1e-6:
         ret = ret.clip(-abs(limit), abs(limit))
     return ret
@@ -879,7 +880,7 @@ def _quantile(x: pl.Expr, driver: Annotated[str, 'distribution: "gaussian" / "un
         ret = x.map_batches(lambda s: pl.Series(stats.cauchy.ppf(s))).cast(REAL)
     else:
         raise ValidationError(f"Unknown driver {driver} for quantile")
-    return ret * sigma
+    return pl.when(x.len() == 1).then(0.0).otherwise(ret) * sigma
 
 @quant_cs_func
 def _rank(x: pl.Expr, rate: Annotated[int, '10**rate buckets'] = 2) -> pl.Expr:
@@ -892,11 +893,11 @@ def _rank(x: pl.Expr, rate: Annotated[int, '10**rate buckets'] = 2) -> pl.Expr:
     rate = int(rate)
     if rate < 0: raise ValidationError("rate must >= 0 for rank")
     if rate == 0:
-        return r1.cast(REAL)
+        return pl.when(x.len() == 1).then(0.0).otherwise(r1.cast(REAL))
     bucket_cnt = pl.lit(10 ** rate)
     bucket = (r1 * bucket_cnt).floor()
     r2 = (bucket.rank(method='min') - 1) / (n - 1)
-    return r2.cast(REAL)
+    return pl.when(x.len() == 1).then(0.0).otherwise(r2.cast(REAL))
 
 @quant_cs_func
 def _scale(x: pl.Expr, scale: Annotated[float, 'scale for all'] = 1.0, longscale: Annotated[float, 'scale for long position'] = 1.0, shortscale: Annotated[float, 'scale for short position'] = 1.0) -> pl.Expr:
@@ -924,14 +925,14 @@ def _winsorize(x: pl.Expr, std: Annotated[float, 'multiple of std'] = 4.0) -> pl
     """
     mu = x.mean()
     sigma = x.std(ddof=0)
-    return x.clip(mu - std * sigma, mu + std * sigma)
+    return pl.when(x.len() == 1).then(x).otherwise(x.clip(mu - std * sigma, mu + std * sigma))
 
 @quant_cs_func
 def _zscore(x: pl.Expr) -> pl.Expr:
     """
     Z-score normalization of x for each date
     """
-    return (x - x.mean()) / x.std(ddof=0)
+    return pl.when(x.len() == 1).then(0.0).otherwise((x - x.mean()) / x.std(ddof=0))
 
 # ################ Group Operators ################
 @quant_eager_func
@@ -949,7 +950,7 @@ def _group_neutralize(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     """
     if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     ret = (x - x.mean()) / x.std(ddof=0)
-    return ret.over([DATE_COL, group])
+    return pl.when(x.len() == 1).then(0.0).otherwise(ret).over([DATE_COL, group])
 
 @quant_eager_func
 def _group_rank(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
@@ -957,7 +958,7 @@ def _group_rank(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     Rank of x within each group for each date, normalized to [0, 1]
     """
     if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
-    return ((x.rank(method='min') - 1) / (x.len() - 1)).over([DATE_COL, group])
+    return pl.when(x.len() == 1).then(0.0).otherwise((x.rank(method='min') - 1) / (x.len() - 1)).over([DATE_COL, group])
 
 @quant_eager_func
 def _group_scale(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
@@ -967,7 +968,7 @@ def _group_scale(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     minx = x.min()
     maxx = x.max()
-    return ((x - minx) / (maxx - minx)).over([DATE_COL, group])
+    return pl.when(x.len() == 1).then(0.0).otherwise((x - minx) / (maxx - minx)).over([DATE_COL, group])
 
 @quant_eager_func
 def _group_zscore(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
@@ -975,4 +976,4 @@ def _group_zscore(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
     Z-score normalization of x within each group for each date
     """
     if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
-    return ((x - x.mean()) / x.std(ddof=0)).over([DATE_COL, group])
+    return pl.when(x.len() == 1).then(0.0).otherwise(((x - x.mean()) / x.std(ddof=0))).over([DATE_COL, group])
