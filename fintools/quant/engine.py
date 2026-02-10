@@ -42,7 +42,8 @@ class QuantEngine:
         if values_cache is not None and values_cache.exists():
             self._result = pl.read_parquet(values_cache)
     
-    def result(self, max_parallel: int = 10) -> pl.DataFrame:
+    def result(self, max_parallel: int | None = None) -> pl.DataFrame:
+        if max_parallel is None: max_parallel = len(self._lazy_res_cols)
         if len(self._lazy_res_cols) == 0: return self._result
         for i in tqdm.trange(0, len(self._lazy_res_cols), max_parallel):
             self._result = pl.concat([self._result.lazy(), *self._lazy_res_cols[i:i+max_parallel]], how='horizontal', parallel=True).collect()

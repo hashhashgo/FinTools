@@ -627,7 +627,7 @@ def _ts_corr(x: pl.Expr, y: pl.Expr, d: Annotated[int, "lookback"], ddof: Annota
     Pearson correlation coefficient between x and y over the past d days
     """
     if d <= 0: raise ValidationError("lookback days must > 0")
-    return pl.rolling_corr(x, y, window_size=d, min_samples=2, ddof=ddof)
+    return pl.rolling_corr(x.cast(REAL), y.cast(REAL), window_size=d, min_samples=2, ddof=ddof)
 
 @quant_ts_func
 def _ts_count_nans(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
@@ -643,7 +643,7 @@ def _ts_cov(x: pl.Expr, y: pl.Expr, d: Annotated[int, "lookback"], ddof: Annotat
     Covariance between x and y over the past d days
     """
     if d <= 0: raise ValidationError("lookback days must > 0")
-    return pl.rolling_cov(x, y, window_size=d, min_samples=2, ddof=ddof)
+    return pl.rolling_cov(x.cast(REAL), y.cast(REAL), window_size=d, min_samples=2, ddof=ddof)
 
 @quant_eager_func
 def _ts_decay_linear(x: pl.Expr, d: Annotated[int, "lookback"], dense: Annotated[bool, "dense=false means operator works in sparse mode and we treat NaN as 0. In dense mode we ignore NaN."] = False) -> pl.Expr:
