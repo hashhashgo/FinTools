@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Iterable, Tuple
 from .AST import Field, Const, Call, Node
+from .registry import BP, OP_TO_FUNC
 
 
 class ParserError(Exception): 
@@ -90,33 +91,6 @@ def tokenize(expression: str) -> Iterable[Tuple[str, str]]:
             raise ParserError(f"Unknown token: {tok}", expression, pos)
     yield ("EOF", "")
 
-BP = {
-    "+": (10, 11),
-    "-": (10, 11),
-    "*": (20, 21),
-    "/": (20, 21),
-    "**": (30, 29),
-    ">":  (5, 6),
-    "<":  (5, 6),
-    ">=": (5, 6),
-    "<=": (5, 6),
-    "==": (5, 6),
-    "!=": (5, 6),
-}
-
-OP_TO_FUNC = {
-    "+": "add",
-    "-": "sub",
-    "*": "mul",
-    "/": "div",
-    "**": "pow",
-    ">":  "gt",
-    "<":  "lt",
-    ">=": "ge",
-    "<=": "le",
-    "==": "eq",
-    "!=": "ne",
-}
 
 class Parser:
     def __init__(self, expression: str) -> None:

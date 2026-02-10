@@ -83,6 +83,7 @@ def get_data(
 
     if df.empty:
         logger.warning("No data fetched, returning empty DataFrame")
+        logger.warning(f"Parameters: datasource={datasource}, symbol={symbol}, type={type}, start={start}, end={end}, freq={freq}")
         return pd.DataFrame(columns=STANDARD_COLUMN_NAMES)
 
     logger.debug("Raw data fetched:")

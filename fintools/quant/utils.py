@@ -39,6 +39,7 @@ def _fetch_all_stock_deep(df: pl.DataFrame, last_trade_date = datetime.now(ZoneI
         for future in t:
             t.postfix = f"Remaining: {GLOBAL_REGISTRY.backend.limiter.get_window_stats(item, 'tushare:daily').remaining} / {policy.max_calls}"
             df = pl.from_pandas(future.result())
+            if df.is_empty(): continue
             df = df.with_columns(pl.col('date').dt.cast_time_unit("ns").dt.replace_time_zone("Asia/Shanghai"))
             df_stocks.append(df)
     

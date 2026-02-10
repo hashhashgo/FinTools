@@ -81,10 +81,6 @@ if __name__ == "__main__":
     from watchdog.events import FileSystemEventHandler
     import dotenv; dotenv.load_dotenv()
     # test_fetch_everything()
-    from fintools.quant.engine import QuantEngine
-    engine = QuantEngine()
-    engine.add(["ts_decay_linear(rank(ts_argmax(close, 30)), 2)"])
-    print(engine._lazy_res_cols[0].collect())
     # test_compile_expression(raise_if_error=False)
     # print("All tests passed.")
     observer = Observer()

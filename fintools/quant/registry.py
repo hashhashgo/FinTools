@@ -33,7 +33,34 @@ DATA_SCHEMA: pl.Schema = pl.Schema({
     'cap': REAL,
     'industry': STRING
 })
-GROUP_FIELDS = {'industry'}
+
+BP = {
+    "+": (10, 11),
+    "-": (10, 11),
+    "*": (20, 21),
+    "/": (20, 21),
+    "**": (30, 29),
+    ">":  (5, 6),
+    "<":  (5, 6),
+    ">=": (5, 6),
+    "<=": (5, 6),
+    "==": (5, 6),
+    "!=": (5, 6),
+}
+
+OP_TO_FUNC = {
+    "+": "add",
+    "-": "sub",
+    "*": "mul",
+    "/": "div",
+    "**": "pow",
+    ">":  "gt",
+    "<":  "lt",
+    ">=": "ge",
+    "<=": "le",
+    "==": "eq",
+    "!=": "ne",
+}
 
 class LLMHidden: pass
 
@@ -115,7 +142,7 @@ def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
             param_list.append((p.name, type_hints[p.name], p.default if p.default is not p.empty else None))
             hint_params.append(f"{p.name}: {type_hints[p.name].__name__}")
             continue
-        hint_params.append(f"{p.name}: expression or constant")
+        hint_params.append(f"{p.name}: expression")
         param_list.append((p.name, object, p.default if p.default is not p.empty else None))
     func_sig = name + "(" + ", ".join([name + (f": {dtype.__name__}" if dtype is not object else "") + (f" = {default}" if default is not None else "") for name, dtype, default in param_list]) + ")"
 
@@ -148,6 +175,26 @@ NORMAL_FUNC = []
 TS_FUNC = []
 CS_FUNC = []
 GROUP_FUNC = []
+
+def full_doc() -> str:
+    doc = \
+f"""Quant Platform Documentation
+Fields: {', '.join(DATA_SCHEMA.keys())}
+DSL:
+  Operators: {' '.join(BP.keys())}
+  Conditional: where(cond, true_expr, false_expr)
+  Functions:
+    Normal:""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in NORMAL_FUNC]) + \
+"""
+    Time Series:""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in TS_FUNC]) + \
+"""
+    Cross Section:""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in CS_FUNC]) + \
+"""
+    Grouping:""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in GROUP_FUNC]) + \
+"""
+Function Details:""" + '\n'.join([func_doc(name) for name in OPS])
+    return doc
+
 
 class GroupBy(Enum):
     OVERSYMBOL = SYMBOL_COL
@@ -257,13 +304,13 @@ def quant_eager_func(func: Callable[..., pl.Expr]) -> ScheduleFunc:
     return wrapper
 
 ################ Arithmetic Operators ################
-@quant_func
-def _densify(x: pl.Expr) -> pl.Expr:
-    """
-    Converts a grouping field of many buckets into lesser number of only available buckets.
-    e.g. [1, 2, 3, 99, 2, 1] -> [1, 2, 3, 4, 2, 1]
-    """
-    return x.rank(method="dense")
+# @quant_func
+# def _densify(x: pl.Expr) -> pl.Expr:
+#     """
+#     Converts a grouping field of many buckets into lesser number of only available buckets.
+#     e.g. [1, 2, 3, 99, 2, 1] -> [1, 2, 3, 4, 2, 1]
+#     """
+#     return x.rank(method="dense")
 
 @quant_func
 def _abs(x: AnyNumerical) -> pl.Expr:
