@@ -77,12 +77,19 @@ def test_compile_expression(pre_hash: list[str] = [], raise_if_error=True):
 if __name__ == "__main__":
     import time
     import os
+    import dotenv; dotenv.load_dotenv()
+
+    from fintools.quant.utils import fetch_all
+
+    fetch_all(api='adj_factor', fetch_new=True)
+    
+    from fintools.quant.engine import QuantEngine
+    engine = QuantEngine(fetch_new_data=False)
+    
+
+    ########## auto test alpha101.txt ##########
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
-    import dotenv; dotenv.load_dotenv()
-    # test_fetch_everything()
-    # test_compile_expression(raise_if_error=False)
-    # print("All tests passed.")
     observer = Observer()
     class ReloadHandler(FileSystemEventHandler):
         def __init__(self, pre_hash: list[str] = []):

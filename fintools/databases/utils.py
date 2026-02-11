@@ -92,8 +92,9 @@ def _sqlite_value_to_pandas_value(df: pd.DataFrame, type_dict: Dict[str, str]) -
         elif pd.api.types.is_bool_dtype(dtype):
             df[col] = df[col].astype(bool)
         elif pd.api.types.is_numeric_dtype(dtype):
-            if dtype == 'int64': dtype = "Int64"
-            elif dtype == 'float64': dtype = "Float64"
+            if dtype.lower() == 'int64': dtype = "Int64"
+            elif dtype.lower() == 'float64': dtype = "Float64"
+            else: raise ValueError(f"Unsupported numeric dtype: {dtype}")
             df[col] = df[col].astype(dtype)
         cols.append(col)
     return df[cols]
