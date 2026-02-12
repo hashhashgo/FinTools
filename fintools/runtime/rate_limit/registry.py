@@ -79,7 +79,7 @@ class RateLimitRegistry:
                                 if max_wait is not None and (time.time() - start_wait) >= max_wait:
                                     raise RateLimitExceeded(f"endpoint rate limit exceeded (max_wait={max_wait}s): {source}.{endpoint}")
                                 if policy.window == 'second': w = 1
-                                else: w = 60
+                                else: w = 10
                                 time.sleep(random.random() * w)
                     yield
 

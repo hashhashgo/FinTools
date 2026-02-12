@@ -1,27 +1,11 @@
 from ..rate_limit import (
     Policy,
     GLOBAL_REGISTRY,
-    RateLimitExceeded, rate_limited,
     ClientProxy
 )
-from typing import cast
-from tenacity import retry, stop_after_attempt, wait_exponential, stop_never
-import wrapt
-from wrapt.wrappers import ObjectProxy
 
-class RetryProxy(wrapt.ObjectProxy):
-    def __init__(self, wrapped, attempts=-1, wait=wait_exponential(multiplier=0.1, min=0.1, max=2)):
-        super().__init__(wrapped)
-        self.__stop__ = stop_after_attempt(attempts) if attempts > 0 else stop_never
-        self.__wait__ = wait
+from ..retry import RetryProxy
 
-    def __getattr__(self, name):
-        if name.startswith("__") and name.endswith("__"):
-            return super().__getattr__(name)
-        attr = super().__getattr__(name)
-        if callable(attr):
-            return retry(stop=self.__stop__, wait=self.__wait__)(attr)
-        else: return attr
 
 import os
 import tushare
@@ -50,11 +34,23 @@ GLOBAL_REGISTRY.set_endpoint_policy("tushare", "adj_factor", Policy(
     window="minute"
 ))
 
+GLOBAL_REGISTRY.set_endpoint_policy("tushare", "stock_st", Policy(
+    max_concurrency=5000,
+    max_calls=500,
+    window="minute"
+))
+
+GLOBAL_REGISTRY.set_endpoint_policy("tushare", "index_daily", Policy(
+    max_concurrency=5000,
+    max_calls=500,
+    window="minute"
+))
+
 pro = ClientProxy(
     client = RetryProxy(tushare.pro_api(os.getenv("TUSHARE_API_KEY", "")), attempts=5),
     source = "tushare",
     raise_on_exceed = False,
-    max_wait = 120
+    max_wait = None
 )
 
 __all__ = ["pro"]

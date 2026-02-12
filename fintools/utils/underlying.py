@@ -5,7 +5,6 @@ from zoneinfo import ZoneInfo
 import requests
 import pandas as pd
 import os
-import tushare
 import efinance as ef
 
 from concurrent.futures import ThreadPoolExecutor, as_completed

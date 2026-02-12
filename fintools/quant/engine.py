@@ -64,10 +64,21 @@ class QuantEngine:
         if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
         evaluated = self.evaluate(alphas=self.alpha_pool | {fid}, horizon=horizon, on='train')
 
-    def pool_relevance(self) -> pl.DataFrame:
-        if len(self.alpha_pool) == 0: return pl.DataFrame()
-        relevance = self._alpha_records.filter(pl.col('fid').is_in(self.alpha_pool)).select(['fid', 'expr', 'ic_mean']).sort('ic_mean', descending=True)
-        return relevance
+    def pool_relevance(self, fid: str, pool: Set[str] | None = None, on: Literal['train', 'test'] = 'train') -> pl.DataFrame:
+        if pool is None:
+            pool = self.alpha_pool
+        if len(pool) == 0: return pl.DataFrame()
+        if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
+        if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
+        for fid2 in pool:
+            if fid2 not in self._all_alphas: raise ValueError(f"Alpha with fid {fid2} not found")
+            if fid2 not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid2}")
+        normalized_alpha = self.alpha().lazy().filter(pl.col('date') >= self.test_start if on == 'test' else pl.col('date') < self.test_start).select(['date', 'symbol', fid, *pool])
+        relevance = normalized_alpha.select([
+            pl.corr(pl.col(fid), pl.col(fid2), method='spearman').over('date')\
+                .drop_nans().drop_nulls().mean().cast(REAL).alias(fid2) for fid2 in pool
+        ])
+        return relevance.collect()
     
     def evaluate(self, alphas: Set[str] | None = None, horizon: int = 5, on: Literal['train', 'test'] = 'train') -> pl.DataFrame:
         if alphas is None:

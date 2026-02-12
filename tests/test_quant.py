@@ -80,8 +80,9 @@ if __name__ == "__main__":
     import dotenv; dotenv.load_dotenv()
 
     from fintools.quant.utils import fetch_all
+    from fintools.utils.underlying import stock_basic, index_basic
 
-    fetch_all(api='adj_factor', fetch_new=True)
+    fetch_all(api='stock_st', underlyings=set(stock_basic()['ts_code'].unique().tolist()), fetch_new=True)
     
     from fintools.quant.engine import QuantEngine
     engine = QuantEngine(fetch_new_data=False)
