@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Literal, Set
+from typing import List, Literal, Set, Iterable
 import polars as pl
 import numpy as np
 from .parser import Parser, Node
@@ -13,12 +13,18 @@ from pathlib import Path
 import tqdm
 import json
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class QuantEngine:
     def __init__(
         self,
+        *,
         start_date: date = date(2014, 1, 1),
-        test_start: date = date(2024, 1, 1),
+        val_start: date = date(2022, 1, 1),
+        test_start: date = date(2024, 4, 1),
+        init_alphas: Iterable[str] | Path | None = None,
         alphas_cache: Path | None = Path("./results/alphas.json"),
         alpha_records_cache: Path | None = Path("./results/alpha_records.parquet"),
         norm_alpha_cache: Path | None = Path("./results/alpha_cache.parquet"),
@@ -26,6 +32,8 @@ class QuantEngine:
         fetch_new_data: bool = False,
     ):
         self.dataset = make_dataset(fetch_new=fetch_new_data).filter(pl.col('date') >= start_date)
+        self.train_start = start_date
+        self.val_start = val_start
         self.test_start = test_start
         self._lazy_res_cols: List[pl.LazyFrame] = []
         self._norm_alpha = self.dataset[['date', 'symbol']]
@@ -56,6 +64,37 @@ class QuantEngine:
             with open(alphas_cache, 'r') as f:
                 self._all_alphas = json.load(f)
         self.alpha_pool = set()
+        if init_alphas is not None:
+            alphas: Set[str] = set()
+            try:
+                if isinstance(init_alphas, Path):
+                    with open(init_alphas, 'r') as f:
+                        alphas |= set(self.add(f.readlines()))
+                else:
+                    alphas |= set(self.add(list(init_alphas)))
+            except Exception as e:
+                logger.error(f"Error adding initial alphas: {e}")
+                raise e
+            error_alphas = self.evaluate(alphas=alphas, horizon=5, on='train')\
+                .filter(pl.col('ic_mean').is_nan() | pl.col('ic_mean').is_null() | (pl.col('ic_win_rate') < 1e-6))['fid'].to_list()
+            for ea in error_alphas:
+                logger.warning(f"Alpha with fid {ea} has invalid IC, and will not be added to the pool. Expr: {self._all_alphas.get(ea, 'unknown')}")
+                alphas.discard(ea)
+            self.alpha_pool |= alphas
+    
+    def __timerange__(self, on: Literal['train', 'val', 'test']) -> tuple[date, date]:
+        if on == 'train':
+            return (self.train_start, self.val_start)
+        elif on == 'val':
+            return (self.val_start, self.test_start)
+        elif on == 'test':
+            return (self.test_start, self.dataset.select(pl.col('date').max()).item())
+        else:
+            raise ValueError(f"Invalid on value: {on}")
+    
+    def __timerange_expr__(self, on: Literal['train', 'val', 'test']) -> pl.Expr:
+        start, end = self.__timerange__(on)
+        return (pl.col('date') >= start) & (pl.col('date') < end)
 
     def pool_add(self, fid: str, horizon: int = 5):
         if fid in self.alpha_pool: return
@@ -63,7 +102,7 @@ class QuantEngine:
         if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
         evaluated = self.evaluate(alphas=self.alpha_pool | {fid}, horizon=horizon, on='train')
 
-    def pool_relevance(self, fid: str, pool: Set[str] | None = None, on: Literal['train', 'test'] = 'train') -> pl.DataFrame:
+    def pool_relevance(self, fid: str, pool: Set[str] | None = None, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
         if pool is None:
             pool = self.alpha_pool
         if len(pool) == 0: return pl.DataFrame()
@@ -72,14 +111,14 @@ class QuantEngine:
         for fid2 in pool:
             if fid2 not in self._all_alphas: raise ValueError(f"Alpha with fid {fid2} not found")
             if fid2 not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid2}")
-        normalized_alpha = self.alpha().lazy().filter(pl.col('date') >= self.test_start if on == 'test' else pl.col('date') < self.test_start).select(['date', 'symbol', fid, *pool])
+        normalized_alpha = self.alpha().lazy().filter(self.__timerange_expr__(on)).select(['date', 'symbol', fid, *pool])
         relevance = normalized_alpha.select([
             pl.corr(pl.col(fid), pl.col(fid2), method='spearman').over('date')\
                 .drop_nans().drop_nulls().mean().cast(REAL).alias(fid2) for fid2 in pool
         ])
         return relevance.collect()
     
-    def evaluate(self, alphas: Set[str] | None = None, horizon: int = 5, on: Literal['train', 'test'] = 'train') -> pl.DataFrame:
+    def evaluate(self, alphas: Set[str] | None = None, horizon: int = 5, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
         if alphas is None:
             alphas = set(self._all_alphas.keys())
         evaluated = set(self._alpha_records.filter((pl.col('horizon') == horizon) & (pl.col('on') == on))['fid'].to_list())
@@ -93,7 +132,7 @@ class QuantEngine:
         )
         IC = normalized_alpha.group_by('date').agg([
             pl.corr(pl.col(c), pl.col(f'ret_h{horizon}')).alias(c) for c in pending
-        ]).filter(pl.col('date') >= self.test_start if on == 'test' else pl.col('date') < self.test_start)
+        ]).filter(self.__timerange_expr__(on))
         IC_mean = IC.select(
             (pl.col(c).drop_nans().drop_nulls().mean().cast(REAL).alias(c) for c in pending),
         ).unpivot(value_name='ic_mean', variable_name='fid')
@@ -152,7 +191,8 @@ class QuantEngine:
             self._raw_alpha.write_parquet(self.raw_values_cache)
         return self._raw_alpha
 
-    def add(self, expressions: List[str] | str):
+    def add(self, expressions: List[str] | str) -> List[str]:
+        fids = []
         if isinstance(expressions, str): expressions = [expressions]
         for expr in expressions:
             lazy_df = self.dataset.lazy()
@@ -160,12 +200,14 @@ class QuantEngine:
             ast = normalize(ast)
             validate(ast)
             aid = ast_to_hash(ast)
+            fids.append(aid)
             self._all_alphas[aid] = expr
             if aid in self._raw_alpha.columns: continue
             col = self.ast_to_col(lazy_df, aid, ast)
             self._lazy_res_cols.append(col)
         with open("./results/alphas.json", 'w') as f:
             json.dump(self._all_alphas, f, indent=2)
+        return fids
 
     def backtest_alpha(self, fid: str, long_top_pct: float = 0.2, delay: int = 1):
         if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
@@ -177,12 +219,12 @@ class QuantEngine:
         ).with_columns(
             ((pl.col(fid).rank(method = 'max') - 1) / (pl.len() - 1)).over('date').alias('rank'),
         ).filter(pl.col('rank').shift(delay) >= 1 - long_top_pct).group_by('date').agg(
-            (pl.col('returns') / 100).mean().alias('alpha_daily_return')
+            (pl.col('returns')).mean().alias('alpha_daily_return')
         ).sort('date').with_columns(
             ((pl.col('alpha_daily_return') + 1).cum_prod() - 1).alias('alpha_cumulative_return')
         )
         df_excess = self.dataset.lazy().group_by('date').agg(
-            (pl.col('returns') / 100).mean().alias('baseline_daily_return')
+            (pl.col('returns')).mean().alias('baseline_daily_return')
         ).sort('date').with_columns(
             ((pl.col('baseline_daily_return') + 1).cum_prod() - 1).alias('baseline_cumulative_return')
         )

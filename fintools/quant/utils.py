@@ -45,7 +45,7 @@ def fetch_all(api: str, underlyings: Set[str], *, allow_no_params: bool = True, 
                     with ThreadPoolExecutor(max_workers=10) as executor:
                         q = deque()
                         for underlying in underlyings:
-                            if last_trade_dates.get(underlying, datetime(1970,1,1, tzinfo=ZoneInfo("Asia/Shanghai"))) < datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=10):
+                            if init or last_trade_dates.get(underlying, datetime(1970,1,1, tzinfo=ZoneInfo("Asia/Shanghai"))) < datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=10):
                                 q.append((underlying, datetime.now().strftime("%Y%m%d")))
                         while len(q):
                             futures = {executor.submit(lambda u=u, t=t: eval(f"pro.{api}")(ts_code=u, end_date=t)): (u, t) for u, t in q}
@@ -134,6 +134,21 @@ def fetch_everything(*args, **kwargs) -> pl.DataFrame:
     return df_all.collect()
 
 def make_dataset(*, drop_days: int = 365, only_SHSZ: bool = True, **kwargs) -> pl.DataFrame:
+    """
+    Make the dataset for quant analysis.
+
+    Parameters
+    ----------
+    drop_days : int, optional
+        Number of initial days to drop for each stock to avoid cold start issues, by default 365
+    only_SHSZ : bool, optional
+        Whether to only include stocks from Shanghai and Shenzhen exchanges, by default True
+    **kwargs
+        Additional arguments to pass to `fetch_everything`
+    
+    If you want to overwrite all previous data and fetch everything, set `init` to `True` in `**kwargs`,
+    otherwise, continuing from the latest date in the existing data.
+    """
     from .registry import DATA_SCHEMA
     df = fetch_everything(**kwargs).lazy()
     df = df.rename({

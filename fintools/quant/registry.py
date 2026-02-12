@@ -166,9 +166,10 @@ def func_doc(func_name: str) -> str:
     ops = OPS[func_name]
     return f"""
 {ops.hint_func_sig}
-{ops.hint_func_doc}
+{ops.hint_func_doc}""" + \
+(f"""
 Parameters:
-""" + "\n".join([f"- {p}" for p in ops.hint_params])
+""" + "\n".join([f"- {p}" for p in ops.hint_params]) if ops.hint_params else "")
 
 
 NORMAL_FUNC = []
@@ -184,15 +185,21 @@ DSL:
   Operators: {' '.join(BP.keys())}
   Conditional: where(cond, true_expr, false_expr)
   Functions:
-    Normal:""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in NORMAL_FUNC]) + \
+    Normal:
+""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in NORMAL_FUNC]) + \
 """
-    Time Series:""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in TS_FUNC]) + \
+    Time Series:
+""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in TS_FUNC]) + \
 """
-    Cross Section:""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in CS_FUNC]) + \
+    Cross Section:
+""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in CS_FUNC]) + \
 """
-    Grouping:""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in GROUP_FUNC]) + \
+    Grouping:
+""" + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in GROUP_FUNC]) + \
 """
-Function Details:""" + '\n'.join([func_doc(name) for name in OPS])
+
+Function Details:
+""" + '\n'.join([func_doc(name) for name in OPS])
     return doc
 
 
@@ -603,7 +610,6 @@ def _kth_element(x: pl.Expr, d: Annotated[int, "lookback"], k: Annotated[int, "k
 def _last_diff_value(x: pl.Expr, d: Annotated[int, "lookback"]) -> pl.Expr:
     """
     Returns last x value not equal to current x value from last d days
-    **This operator is slow**
     """
     if d <= 0: raise ValidationError("lookback days must > 0")
     idx = pl.col("date").cum_count().reverse()
@@ -780,7 +786,7 @@ def _ts_rank(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[floa
 def _ts_regression(y: pl.Expr, x: pl.Expr, d: Annotated[int, 'lookback'], lag: Annotated[int, 'y_i=\\beta x_{i-lag}+\\alpha'] = 0, rettype: Annotated[int, 'what to return'] = 0) -> pl.Expr:
     """
     Perform linear regression of y on x over the past d days with optional lag and return specified regression component.
-    y_i = β * x_{i-lag} + α
+    y_i = \\beta * x_{i-lag} + \\alpha
     rettype options:
     - 0: residuals (y - y_)
     - 1: alpha (intercept)
@@ -790,8 +796,8 @@ def _ts_regression(y: pl.Expr, x: pl.Expr, d: Annotated[int, 'lookback'], lag: A
     - 5: SST (Total Sum of Squares)
     - 6: R^2 (Coefficient of Determination)
     - 7: MSE (Mean Squared Error)
-    - 8: Standard Error of β
-    - 9: Standard Error of α
+    - 8: Standard Error of \\beta
+    - 9: Standard Error of \\alpha
     """
     if d <= 0: raise ValidationError("lookback days must > 0")
     if lag < 0: raise ValidationError("lag must >= 0")
