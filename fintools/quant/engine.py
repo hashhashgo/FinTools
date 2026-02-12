@@ -25,8 +25,7 @@ class QuantEngine:
         raw_values_cache: Path | None = Path("./results/raw_alpha_values.parquet"),
         fetch_new_data: bool = False,
     ):
-        dataset = make_dataset(fetch_new=fetch_new_data).filter(pl.col('date') >= start_date)
-        self.dataset = dataset
+        self.dataset = make_dataset(fetch_new=fetch_new_data).filter(pl.col('date') >= start_date)
         self.test_start = test_start
         self._lazy_res_cols: List[pl.LazyFrame] = []
         self._norm_alpha = self.dataset[['date', 'symbol']]
