@@ -59,6 +59,11 @@ mcp = [
 graph = [
     "langgraph>=1.0.4",
 ]
+report = [
+    "graphviz>=0.21",
+    "matplotlib>=3.10.8",
+    "reportlab>=4.4.9",
+]
 
 [dependency-groups]
 dev = [
