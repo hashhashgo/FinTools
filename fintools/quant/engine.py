@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Literal, Set, Iterable
+from typing import List, Literal, Set, Iterable, Tuple, cast
 import polars as pl
 import numpy as np
 from .parser import Parser, Node
@@ -23,7 +23,7 @@ class QuantEngine:
         *,
         start_date: date = date(2014, 1, 1),
         val_start: date = date(2022, 1, 1),
-        test_start: date = date(2024, 4, 1),
+        test_start: date = date(2024, 1, 1),
         init_alphas: Iterable[str] | Path | None = None,
         alphas_cache: Path | None = Path("./results/alphas.json"),
         alpha_records_cache: Path | None = Path("./results/alpha_records.parquet"),
@@ -131,7 +131,7 @@ class QuantEngine:
             how='inner'
         )
         IC = normalized_alpha.group_by('date').agg([
-            pl.corr(pl.col(c), pl.col(f'ret_h{horizon}')).alias(c) for c in pending
+            pl.corr(pl.col(c), pl.col(f'ret_h{horizon}'), method='spearman').alias(c) for c in pending
         ]).filter(self.__timerange_expr__(on))
         IC_mean = IC.select(
             (pl.col(c).drop_nans().drop_nulls().mean().cast(REAL).alias(c) for c in pending),
@@ -209,56 +209,131 @@ class QuantEngine:
             json.dump(self._all_alphas, f, indent=2)
         return fids
 
-    def backtest_alpha(self, fid: str, long_top_pct: float = 0.2, delay: int = 1):
+    def plot_top_20_backtest(
+            self,
+            fid: str,
+            *,
+            rebalance_period: int = 7,
+            delay: int = 1,
+            figsettings: dict = {'figsize': (12,6), 'dpi':200},
+        ):
+        import matplotlib.pyplot as plt
+
+        back_test_result = self.backtest_alpha(fid=fid, rebalance_period=rebalance_period, pct_ranges=[(0.8, 1.0)], delay=delay)[0]
+        fig = plt.figure(**figsettings)
+        ax = fig.add_subplot(1, 1, 1)
+        ax.plot(back_test_result['alpha_all']['date'], back_test_result['alpha_all']['alpha_cumulative_return'] + 1, label='NAV', color='blue')
+        ax.plot(back_test_result['alpha_all']['date'], back_test_result['alpha_all']['baseline_cumulative_return'] + 1, label='Baseline NAV', color='black', linestyle='--')
+        ax2 = ax.twinx()
+        ax2.plot(back_test_result['alpha_all']['date'], back_test_result['alpha_all']['excess_cumulative_return'] + 1, label='Excess NAV', color='orange')
+        ax2.legend(loc='upper right')
+        ax.axvline(x=cast(float, self.val_start), color='gray', linestyle='--', label='Val Start')
+        ax.axvline(x=cast(float, self.test_start), color='red', linestyle='--', label='Test Start')
+        ax.set_title(fid)
+        ax.legend(loc='upper left')
+        fig.tight_layout()
+        return fig
+
+    def plot_quintile_backtest(
+            self,
+            fid: str,
+            *,
+            rebalance_period: int = 7,
+            delay: int = 1,
+            figsettings: dict = {'figsize': (12,6), 'dpi':200},
+        ):
+        import matplotlib.pyplot as plt
+        
+        pct_ranges = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
+        backtest_results = self.backtest_alpha(fid, rebalance_period=rebalance_period, pct_ranges=pct_ranges, delay=delay)
+        fig = plt.figure(**figsettings)
+        ax = fig.add_subplot(1, 1, 1)
+        if pct_ranges is None: pct_ranges = [(np.inf, np.inf)] * len(backtest_results)
+        for i, (ran, res) in enumerate(zip(pct_ranges, backtest_results)):
+            ax.plot(res['alpha_all']['date'], res['alpha_all']['alpha_cumulative_return'], label=f"{ran[0] * 100:.0f}%-{ran[1] * 100:.0f}%" if ran[0] is not np.inf and ran[1] is not np.inf else str(i))
+        ax.plot(backtest_results[0]['alpha_all']['date'], backtest_results[0]['alpha_all']['baseline_cumulative_return'], label='Baseline', color='black', linestyle='--')
+        ax.axvline(x=cast(float, self.val_start), color='gray', linestyle='--', label='Val Start')
+        ax.axvline(x=cast(float, self.test_start), color='red', linestyle='--', label='Test Start')
+        ax.set_title(fid)
+        ax.legend()
+        fig.tight_layout()
+        return fig
+
+    def backtest_alpha(
+            self,
+            fid: str,
+            *,
+            rebalance_period: int = 7,
+            pct_ranges: List[Tuple[float, float]] = [(0.8, 1.0)],
+            delay: int = 1
+        ):
         if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
         if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
-        df_alpha = self.dataset.lazy().join(
-            self.alpha().lazy().select(['date', 'symbol', fid]),
-            on=['date', 'symbol'],
-            how='inner'
-        ).with_columns(
-            ((pl.col(fid).rank(method = 'max') - 1) / (pl.len() - 1)).over('date').alias('rank'),
-        ).filter(pl.col('rank').shift(delay) >= 1 - long_top_pct).group_by('date').agg(
-            (pl.col('returns')).mean().alias('alpha_daily_return')
-        ).sort('date').with_columns(
-            ((pl.col('alpha_daily_return') + 1).cum_prod() - 1).alias('alpha_cumulative_return')
-        )
-        df_excess = self.dataset.lazy().group_by('date').agg(
-            (pl.col('returns')).mean().alias('baseline_daily_return')
-        ).sort('date').with_columns(
-            ((pl.col('baseline_daily_return') + 1).cum_prod() - 1).alias('baseline_cumulative_return')
-        )
-        alpha_all = df_alpha.join(df_excess, on='date', how='inner').with_columns(
-            (pl.col('alpha_daily_return') - pl.col('baseline_daily_return')).alias('excess_daily_return'),
-            ((pl.col('alpha_cumulative_return') + 1) / (pl.col('baseline_cumulative_return') + 1) - 1).alias('excess_cumulative_return')
-        )
-        ann_ret = alpha_all.select(pl.col('alpha_daily_return').drop_nulls().mean() * 252)
-        ann_vol = alpha_all.select(pl.col('alpha_daily_return').drop_nulls().std() * np.sqrt(252))
-        max_drawdown = df_alpha.select(
-            (pl.col('alpha_cumulative_return') - pl.col('alpha_cumulative_return').cum_max()).min().alias('drawdown')
-        )
-        final_return = df_alpha.select(pl.col('alpha_cumulative_return').last())
-        excess_sharpe = alpha_all.select(
-            (pl.col('excess_daily_return').drop_nulls().mean() / (pl.col('excess_daily_return').drop_nulls().std() + 1e-9) * np.sqrt(252)).alias('excess_sharpe')
-        )
-        alpha_all, ann_ret, ann_vol, max_drawdown, final_return, excess_sharpe = pl.collect_all([alpha_all, ann_ret, ann_vol, max_drawdown, final_return, excess_sharpe])
-        ann_ret = ann_ret.item()
-        ann_vol = ann_vol.item()
-        max_drawdown = max_drawdown.item()
-        final_return = final_return.item()
-        calmar = -ann_ret / (max_drawdown + 1e-9)
-        sharpe = ann_ret / (ann_vol + 1e-9)
-        excess_sharpe = excess_sharpe.item()
-        return {
-            'alpha_all': alpha_all,
-            'ann_ret': ann_ret,
-            'ann_vol': ann_vol,
-            'max_drawdown': max_drawdown,
-            'final_return': final_return,
-            'calmar': calmar,
-            'sharpe': sharpe,
-            'excess_sharpe': excess_sharpe,
-        }
+        ret = []
+        all_lazy = []
+        for long_pct_bottom, long_pct_top in pct_ranges:
+            df_alpha = self.dataset.lazy().join(
+                self.alpha().lazy().select(['date', 'symbol', fid]),
+                on=['date', 'symbol'],
+                how='inner'
+            ).with_columns(
+                (pl.col('date').cast(INTEGER) / rebalance_period).floor().cast(INTEGER).alias('period')
+            ).sort('date').with_columns(
+                pl.col(fid).first().over(['period', 'symbol']).alias(fid),
+                pl.col('buyable').first().over(['period', 'symbol']).alias('buyable'),
+                pl.col('sellable').first().over(['period', 'symbol']).alias('sellable'),
+            ).with_columns(
+                ((pl.col(fid).rank(method = 'max') - 1) / (pl.len() - 1)).over('date').shift(delay).alias('rank'),
+                pl.col('buyable').shift(delay).alias('buyable'),
+                pl.col('sellable').shift(delay).alias('sellable'),
+            ).filter(
+                (long_pct_bottom <= pl.col('rank')) &
+                ((pl.col('rank') < long_pct_top) if long_pct_top < 1.0 else pl.lit(True)) &
+                (pl.col('buyable') == True)
+            ).group_by('date').agg(
+                (pl.col('returns')).mean().alias('alpha_daily_return')
+            ).sort('date').with_columns(
+                ((pl.col('alpha_daily_return') + 1).cum_prod() - 1).alias('alpha_cumulative_return')
+            )
+            df_baseline = self.dataset.lazy().group_by('date').agg(
+                (pl.col('returns')).mean().alias('baseline_daily_return')
+            ).sort('date').with_columns(
+                ((pl.col('baseline_daily_return') + 1).cum_prod() - 1).alias('baseline_cumulative_return')
+            )
+            alpha_all = df_alpha.join(df_baseline, on='date', how='inner').with_columns(
+                ((1 + pl.col('alpha_daily_return')) / (1 + pl.col('baseline_daily_return')) - 1).alias('excess_daily_return'),
+                ((pl.col('alpha_cumulative_return') + 1) / (pl.col('baseline_cumulative_return') + 1) - 1).alias('excess_cumulative_return')
+            )
+            excess_max_drawdown = alpha_all.select(
+                ((pl.col('excess_cumulative_return') - pl.col('excess_cumulative_return').cum_max()) / (1 + (pl.col('excess_cumulative_return')).cum_max() + 1e-9)).min()
+            )
+            excess_final_return = alpha_all.select(pl.col('excess_cumulative_return').last())
+            excess_ann_ret = alpha_all.select(pl.col('excess_daily_return').drop_nulls().mean() * 252)
+            excess_ann_vol = alpha_all.select(pl.col('excess_daily_return').drop_nulls().std() * np.sqrt(252))
+            all_lazy.extend([alpha_all, excess_max_drawdown, excess_final_return, excess_ann_ret, excess_ann_vol])
+        all_collected = pl.collect_all(all_lazy)
+        for i in range(len(pct_ranges)):
+            alpha_all, excess_max_drawdown, excess_final_return, excess_ann_ret, excess_ann_vol = all_collected[i*5:(i+1)*5]
+            excess_max_drawdown = excess_max_drawdown.item()
+            excess_final_return = excess_final_return.item()
+            excess_ann_ret = excess_ann_ret.item()
+            excess_ann_vol = excess_ann_vol.item()
+            excess_sharpe = excess_ann_ret / (excess_ann_vol + 1e-9)
+            excess_calmar = -excess_ann_ret / (excess_max_drawdown + 1e-9)
+            ret.append({
+                'expr': self._all_alphas.get(fid, 'unknown'),
+                'alpha_all': alpha_all,
+                'excess_max_drawdown': excess_max_drawdown,
+                'excess_final_return': excess_final_return,
+                'excess_calmar': excess_calmar,
+                'excess_ann_ret': excess_ann_ret,
+                'excess_ann_vol': excess_ann_vol,
+                'excess_sharpe': excess_sharpe,
+            })
+        return ret
+
+    def fid_to_expr(self, fid: str) -> str:
+        return self._all_alphas.get(fid, 'unknown')
     
     @classmethod
     def normalize_alpha(cls, df: pl.LazyFrame, cols: List[str]) -> pl.LazyFrame:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import defaultdict
 from contextlib import contextmanager
 from typing import Dict, Tuple
 import time
@@ -19,6 +20,7 @@ class RateLimitRegistry:
 
         self._source_policy: Dict[str, Policy] = {}
         self._endpoint_policy: Dict[Tuple[str, str], Policy] = {}
+        self._default_endpoint_policy: Dict[str, Policy] = defaultdict(lambda: DEFAULT_POLICY)
 
         self._source_conc: Dict[str, ConcurrencyLimiter] = {}
         self._endpoint_conc: Dict[Tuple[str, str], ConcurrencyLimiter] = {}
@@ -31,12 +33,15 @@ class RateLimitRegistry:
     def set_endpoint_policy(self, source: str, endpoint: str, policy: Policy):
         self._endpoint_policy[(source, endpoint)] = policy
         self._endpoint_conc[(source, endpoint)] = ConcurrencyLimiter(policy.max_concurrency)
+    
+    def set_default_endpoint_policy(self, source: str, policy: Policy):
+        self._default_endpoint_policy[source] = policy
 
     def _resolve_source_policy(self, source: str) -> Policy:
         return self._source_policy.get(source, DEFAULT_POLICY)
 
     def _resolve_endpoint_policy(self, source: str, endpoint: str) -> Policy:
-        return self._endpoint_policy.get((source, endpoint), self._resolve_source_policy(source))
+        return self._endpoint_policy.get((source, endpoint), self._default_endpoint_policy[source])
 
     def guard(self, source: str, endpoint: str, raise_on_exceed: bool = True, max_wait: float | None = None):
         """

@@ -16,7 +16,7 @@ GLOBAL_REGISTRY.set_source_policy("tushare", Policy(
     window = "minute"
 ))
 
-GLOBAL_REGISTRY.set_endpoint_policy("tushare", "daily", Policy(
+GLOBAL_REGISTRY.set_default_endpoint_policy("tushare", Policy(
     max_concurrency=5000,
     max_calls=500,
     window="minute"
@@ -34,15 +34,9 @@ GLOBAL_REGISTRY.set_endpoint_policy("tushare", "adj_factor", Policy(
     window="minute"
 ))
 
-GLOBAL_REGISTRY.set_endpoint_policy("tushare", "stock_st", Policy(
+GLOBAL_REGISTRY.set_endpoint_policy("tushare", "stk_limit", Policy(
     max_concurrency=5000,
-    max_calls=500,
-    window="minute"
-))
-
-GLOBAL_REGISTRY.set_endpoint_policy("tushare", "index_daily", Policy(
-    max_concurrency=5000,
-    max_calls=500,
+    max_calls=400,
     window="minute"
 ))
 

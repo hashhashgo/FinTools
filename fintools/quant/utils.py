@@ -108,6 +108,7 @@ def fetch_everything(*args, **kwargs) -> pl.DataFrame:
     df_daily_basic = fetch_all(api="daily_basic", underlyings=set(stock_basic()['ts_code'].unique().tolist()), **kwargs).lazy()
     df_adj_factor = fetch_all(api="adj_factor", underlyings=set(stock_basic()['ts_code'].unique().tolist()), **kwargs).lazy()
     df_st = fetch_all(api="stock_st", underlyings=set(stock_basic()['ts_code'].unique().tolist()), **kwargs).lazy()
+    df_stk_limit = fetch_all(api="stk_limit", underlyings=set(stock_basic()['ts_code'].unique().tolist()), **kwargs).lazy()
     df_all = df_stock\
         .join(pl.from_pandas(stock_basic())[['ts_code', 'industry']].lazy(), on='ts_code', how='left')\
         .join(df_daily_basic, on=['ts_code', 'date'], how='left')\
@@ -116,8 +117,19 @@ def fetch_everything(*args, **kwargs) -> pl.DataFrame:
             df_st.select('ts_code', 'date', pl.col('name').alias('st')),
             on=['ts_code', 'date'], how='left'
         )\
+        .join(
+            df_stk_limit.select('ts_code', 'date', 'up_limit', 'down_limit'),
+            on=['ts_code', 'date'], how='left'
+        )\
         .with_columns(
-            pl.when(pl.col('st').is_null()).then(pl.lit(False)).otherwise(pl.lit(True)).alias('st')
+            pl.when(
+                pl.col('st').is_null() &
+                ((pl.col('close') < pl.col('up_limit')) | pl.col('up_limit').is_null())  # use non-adjusted price to determine buyable/sellable
+            ).then(pl.lit(True)).otherwise(pl.lit(False)).alias('buyable'),
+            pl.when(
+                pl.col('st').is_null() &
+                ((pl.col('close') > pl.col('down_limit')) | pl.col('down_limit').is_null())
+            ).then(pl.lit(True)).otherwise(pl.lit(False)).alias('sellable')
         )\
         .sort(['ts_code', 'date'], descending=[False, False])\
         .with_columns(
