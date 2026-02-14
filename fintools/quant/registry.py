@@ -987,6 +987,15 @@ def _zscore(x: pl.Expr) -> pl.Expr:
     """
     return pl.when(x.len() == 1).then(0.0).otherwise((x - x.mean()) / x.std(ddof=0))
 
+@quant_cs_func
+def _stddev(*args: pl.Expr) -> pl.Expr:
+    """
+    Maximum value among the arguments
+    """
+    m = pl.mean_horizontal(*args)
+    msq = pl.mean_horizontal(*(pl.when(arg.is_not_null()).then(arg * arg).otherwise(None) for arg in args))
+    return (msq - m * m).sqrt()
+
 # ################ Group Operators ################
 @quant_eager_func
 def _group_mean(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:

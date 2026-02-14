@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from gc import collect
 from typing import List, Literal, Set, Iterable, Tuple, cast
 import polars as pl
 import numpy as np
@@ -52,10 +53,11 @@ class QuantEngine:
             ('on', STRING),
             ('ic_mean', REAL),
             ('ic_median', REAL),
-            ('ic_std', REAL),
             ('ic_ir', REAL),
             ('ic_win_rate', REAL),
-            ('ic_loss_rate', REAL),
+            ('excess_ann_ret', REAL),
+            ('excess_sharpe', REAL),
+            ('excess_calmar', REAL),
         ])
         if not fetch_new_data and alpha_records_cache is not None and alpha_records_cache.exists():
             self._alpha_records = pl.read_parquet(alpha_records_cache)
@@ -118,21 +120,53 @@ class QuantEngine:
         ])
         return relevance.collect()
     
-    def evaluate(self, alphas: Set[str] | None = None, horizon: int = 5, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
+    def evaluate(self, alphas: Set[str] | None = None, horizon: int = 5, rebalance_period: int = 7, rebalance_delay: int = 1, long_pct: float = 0.8, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
         if alphas is None:
             alphas = set(self._all_alphas.keys())
         evaluated = set(self._alpha_records.filter((pl.col('horizon') == horizon) & (pl.col('on') == on))['fid'].to_list())
         pending = alphas - evaluated
-        normalized_alpha = self.alpha().lazy().join(
-            self.dataset.lazy().with_columns(
-                (pl.col('vwap').shift(-horizon + 1) / (pl.col('vwap').shift(1) + 1e-9)).over('symbol').fill_null(0.0).alias(f'ret_h{horizon}')
-            ).select(['date', 'symbol', f'ret_h{horizon}']),
+        if len(pending) == 0:
+            return self._alpha_records.filter((pl.col('horizon') == horizon) & (pl.col('on') == on) & pl.col('fid').is_in(alphas))
+        # normalized_alpha = self.alpha().lazy().join(
+        normalized_alpha = self.alpha().select(['date', 'symbol', *pending]).join(
+            # self.dataset.lazy().with_columns(
+            self.dataset.with_columns(
+                (pl.col('vwap').shift(-horizon) / (pl.col('vwap').shift(-1) + 1e-9) - 1).over('symbol').fill_null(0.0).alias(f'ret_h{horizon}')
+            ).select(['date', 'symbol', f'ret_h{horizon}', 'buyable', 'sellable', 'returns']),
             on=['date', 'symbol'],
             how='inner'
+        ).with_columns(
+            (pl.col('date').cast(INTEGER) / rebalance_period).floor().cast(INTEGER).alias('period')
+        ).with_columns(
+            pl.col('buyable').first().over(['period', 'symbol']).alias('buyable'),
+            # pl.col('sellable').first().over(['period', 'symbol']).alias('sellable'),
         )
+
         IC = normalized_alpha.group_by('date').agg([
             pl.corr(pl.col(c), pl.col(f'ret_h{horizon}'), method='spearman').alias(c) for c in pending
         ]).filter(self.__timerange_expr__(on))
+        df_daily_ret = normalized_alpha.sort('date').with_columns(
+            (
+                (((pl.col(fid).rank(method = 'max') - 1) / (pl.len() - 1)).over('date') >= long_pct) &\
+                (pl.col('buyable') == True)
+            ).alias(fid) for fid in pending
+        ).with_columns(
+            pl.col(fid).first().over(['period', 'symbol']).alias(fid) for fid in pending
+        ).with_columns(
+            pl.when(
+                pl.col(fid).shift(rebalance_delay).over('symbol')
+            ).then(pl.col('returns')).otherwise(None).alias(fid) for fid in pending
+        ).group_by('date').agg(
+            [(pl.col(fid)).mean().alias(fid) for fid in pending] +
+            [(pl.col('returns')).mean().alias('baseline_daily_return')]
+        ).sort('date').filter(self.__timerange_expr__(on))
+        df_NAV = df_daily_ret.select(
+            (
+                (pl.col(fid) + 1).cum_prod() /
+                (pl.col('baseline_daily_return') + 1).cum_prod()
+            ).alias(fid) for fid in pending # excess NAV
+        )
+
         IC_mean = IC.select(
             (pl.col(c).drop_nans().drop_nulls().mean().cast(REAL).alias(c) for c in pending),
         ).unpivot(value_name='ic_mean', variable_name='fid')
@@ -148,22 +182,40 @@ class QuantEngine:
         IC_win_rate = IC.select(
             (pl.col(c).filter(pl.col(c) > 0).drop_nans().drop_nulls().count() / (pl.col(c).drop_nans().drop_nulls().count() + 1e-9)).cast(REAL).alias(c) for c in pending
         ).unpivot(value_name='ic_win_rate', variable_name='fid')
-        IC_loss_rate = IC.select(
-            (pl.col(c).filter(pl.col(c) < 0).drop_nans().drop_nulls().count() / (pl.col(c).drop_nans().drop_nulls().count() + 1e-9)).cast(REAL).alias(c) for c in pending
-        ).unpivot(value_name='ic_loss_rate', variable_name='fid')
+
+        # excess_ann_ret = df_NAV.select(
+        #     (pl.col(fid).last()  / pl.len() * 252).alias(fid) for fid in pending
+        # ).unpivot(value_name='excess_ann_ret', variable_name='fid')
+        excess_ann_ret = df_daily_ret.select(
+            (((1 + pl.col(fid)) / (1 + pl.col('baseline_daily_return')) - 1).drop_nulls().mean() * (252)).alias(fid) for fid in pending
+        ).unpivot(value_name='excess_ann_ret', variable_name='fid')
+        excess_ann_vol = df_daily_ret.select(
+            (((1 + pl.col(fid)) / (1 + pl.col('baseline_daily_return')) - 1).drop_nulls().std() * np.sqrt(252)).alias(fid) for fid in pending
+        ).unpivot(value_name='excess_ann_vol', variable_name='fid')
+        excess_max_drawdown = df_NAV.select(
+            ((pl.col(fid) - pl.col(fid).cum_max()) / ((pl.col(fid)).cum_max() + 1e-9)).min().alias(fid) for fid in pending
+        ).unpivot(value_name='excess_max_drawdown', variable_name='fid')
+
         records = IC_mean \
             .join(IC_median, on='fid')\
-            .join(IC_std, on='fid')\
             .join(IC_ir, on='fid')\
             .join(IC_win_rate, on='fid')\
-            .join(IC_loss_rate, on='fid')
+            .join(excess_ann_ret, on='fid')\
+            .join(excess_ann_vol, on='fid')\
+            .join(excess_max_drawdown, on='fid')\
+            .with_columns(
+                (pl.col('excess_ann_ret') / (pl.col('excess_ann_vol') + 1e-9)).alias('excess_sharpe'),
+                (-pl.col('excess_ann_ret') / (pl.col('excess_max_drawdown') + 1e-9)).alias('excess_calmar'),
+            )
         records = records.with_columns(
             pl.col('fid').map_elements(lambda x: self._all_alphas.get(x, 'unknown')).alias('expr'),
             pl.lit(horizon).alias('horizon'),
             pl.lit(on).alias('on'),
-        ).select(self._alpha_records.columns)
-        self._alpha_records = pl.concat([self._alpha_records.lazy(), records], how='vertical').collect()
-        self._alpha_records = self._alpha_records.unique(subset=['fid', 'horizon', 'on'], keep='last')
+        ).select(self._alpha_records.columns).cast(self._alpha_records.schema)
+        # self._alpha_records = pl.concat([self._alpha_records.lazy(), records], how='vertical')\
+        self._alpha_records = pl.concat([self._alpha_records, records], how='vertical')\
+            .unique(subset=['fid', 'horizon', 'on'], keep='last')
+            # .unique(subset=['fid', 'horizon', 'on'], keep='last').collect()
         if self.alpha_records_cache is not None:
             self.alpha_records_cache.parent.mkdir(parents=True, exist_ok=True)
             self._alpha_records.write_parquet(self.alpha_records_cache)
@@ -195,6 +247,8 @@ class QuantEngine:
         fids = []
         if isinstance(expressions, str): expressions = [expressions]
         for expr in expressions:
+            expr = expr.strip()
+            if len(expr) == 0 or expr.startswith('#'): continue
             lazy_df = self.dataset.lazy()
             ast = Parser(expression=expr).parse()
             ast = normalize(ast)
@@ -219,7 +273,7 @@ class QuantEngine:
         ):
         import matplotlib.pyplot as plt
 
-        back_test_result = self.backtest_alpha(fid=fid, rebalance_period=rebalance_period, pct_ranges=[(0.8, 1.0)], delay=delay)[0]
+        back_test_result = self.backtest_details(fid=fid, rebalance_period=rebalance_period, pct_ranges=[(0.8, 1.0)], rebalance_delay=delay)[0]
         fig = plt.figure(**figsettings)
         ax = fig.add_subplot(1, 1, 1)
         ax.plot(back_test_result['alpha_all']['date'], back_test_result['alpha_all']['alpha_cumulative_return'] + 1, label='NAV', color='blue')
@@ -245,7 +299,7 @@ class QuantEngine:
         import matplotlib.pyplot as plt
         
         pct_ranges = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
-        backtest_results = self.backtest_alpha(fid, rebalance_period=rebalance_period, pct_ranges=pct_ranges, delay=delay)
+        backtest_results = self.backtest_details(fid, rebalance_period=rebalance_period, pct_ranges=pct_ranges, rebalance_delay=delay)
         fig = plt.figure(**figsettings)
         ax = fig.add_subplot(1, 1, 1)
         if pct_ranges is None: pct_ranges = [(np.inf, np.inf)] * len(backtest_results)
@@ -259,13 +313,13 @@ class QuantEngine:
         fig.tight_layout()
         return fig
 
-    def backtest_alpha(
+    def backtest_details(
             self,
             fid: str,
             *,
             rebalance_period: int = 7,
             pct_ranges: List[Tuple[float, float]] = [(0.8, 1.0)],
-            delay: int = 1
+            rebalance_delay: int = 1
         ):
         if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
         if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
@@ -279,13 +333,15 @@ class QuantEngine:
             ).with_columns(
                 (pl.col('date').cast(INTEGER) / rebalance_period).floor().cast(INTEGER).alias('period')
             ).sort('date').with_columns(
-                pl.col(fid).first().over(['period', 'symbol']).alias(fid),
+                ((pl.col(fid).rank(method = 'max') - 1) / (pl.len() - 1)).over('date').alias('rank'),
+            ).with_columns(
+                pl.col('rank').first().over(['period', 'symbol']).alias('rank'),
                 pl.col('buyable').first().over(['period', 'symbol']).alias('buyable'),
                 pl.col('sellable').first().over(['period', 'symbol']).alias('sellable'),
             ).with_columns(
-                ((pl.col(fid).rank(method = 'max') - 1) / (pl.len() - 1)).over('date').shift(delay).alias('rank'),
-                pl.col('buyable').shift(delay).alias('buyable'),
-                pl.col('sellable').shift(delay).alias('sellable'),
+                pl.col('rank').shift(rebalance_delay).over('symbol').alias('rank'),
+                pl.col('buyable').shift(rebalance_delay).over('symbol').alias('buyable'),
+                pl.col('sellable').shift(rebalance_delay).over('symbol').alias('sellable'),
             ).filter(
                 (long_pct_bottom <= pl.col('rank')) &
                 ((pl.col('rank') < long_pct_top) if long_pct_top < 1.0 else pl.lit(True)) &

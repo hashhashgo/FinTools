@@ -134,14 +134,17 @@ def fetch_everything(*args, **kwargs) -> pl.DataFrame:
         .sort(['ts_code', 'date'], descending=[False, False])\
         .with_columns(
             pl.col('adj_factor').forward_fill().backward_fill().over('ts_code')
+        ).with_columns(
+            (pl.col("amount") / pl.col("vol")).alias("vwap")
         )
     df_all = df_all.with_columns(
         (pl.col('open') * pl.col('adj_factor')).alias('open_adj'),
         (pl.col('high') * pl.col('adj_factor')).alias('high_adj'),
         (pl.col('low') * pl.col('adj_factor')).alias('low_adj'),
         (pl.col('close') * pl.col('adj_factor')).alias('close_adj'),
-    ).drop(['open', 'high', 'low', 'close']).rename({
-        'open_adj': 'open', 'high_adj': 'high', 'low_adj': 'low', 'close_adj': 'close'
+        (pl.col('vwap') * pl.col('adj_factor')).alias('vwap_adj')
+    ).drop(['open', 'high', 'low', 'close', 'vwap']).rename({
+        'open_adj': 'open', 'high_adj': 'high', 'low_adj': 'low', 'close_adj': 'close', 'vwap_adj': 'vwap'
     })
     return df_all.collect()
 
@@ -171,7 +174,6 @@ def make_dataset(*, drop_days: int = 365, only_SHSZ: bool = True, **kwargs) -> p
         pl.col('returns').fill_null(0.0) / 100
     )
     df = df.with_columns(
-        (pl.col("amount") / pl.col("volume")).alias("vwap"),
         pl.col('date').dt.date().alias('date')
     )
     df = df.filter(

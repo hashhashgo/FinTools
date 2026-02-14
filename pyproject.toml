@@ -47,7 +47,7 @@ members = [
 ]
 
 [tool.uv.sources]
-fintools = { workspace = true, editable = true }
+fintools = { workspace = true }
 
 [project.entry-points.'fintools.mcp_services']
 
@@ -68,7 +68,7 @@ report = [
 [dependency-groups]
 dev = [
     "fastmcp>=2.14.3",
-    "fintools",
+    "fintools[graph,mcp,report]",
     "ipython>=8.37.0",
     "langchain>=1.1.3",
     "langchain-mcp-adapters>=0.2.1",

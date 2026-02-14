@@ -78,14 +78,10 @@ if __name__ == "__main__":
     import time
     import os
     import dotenv; dotenv.load_dotenv()
+    from pathlib import Path
 
-    from fintools.quant.utils import fetch_all
-    from fintools.utils.underlying import stock_basic, index_basic
-
-    fetch_all(api='stock_st', underlyings=set(stock_basic()['ts_code'].unique().tolist()), fetch_new=True)
-    
     from fintools.quant.engine import QuantEngine
-    engine = QuantEngine(fetch_new_data=False)
+    engine = QuantEngine(init_alphas=Path('tests/alpha101.txt'), fetch_new_data=False)
     
 
     ########## auto test alpha101.txt ##########
