@@ -2,7 +2,7 @@ from typing import List, Literal, Set, Iterable, Tuple, cast, IO
 import polars as pl
 import numpy as np
 from .parser import Parser, Node
-from .validate import normalize, validate, ast_to_hash
+from .validate import normalize, validate, ast_to_hash, ast_to_expression
 from .compiler import compile_expr
 from .utils import make_dataset
 from .registry import ScheduleColume, Schedule, GroupBy
@@ -259,7 +259,7 @@ class QuantEngine:
             validate(ast)
             aid = ast_to_hash(ast)
             fids.append(aid)
-            self._all_alphas[aid] = expr
+            self._all_alphas[aid] = ast_to_expression(ast)
             if aid in self._raw_alpha.columns: continue
             col = self.ast_to_col(lazy_df, aid, ast)
             self._lazy_res_cols.append(col)

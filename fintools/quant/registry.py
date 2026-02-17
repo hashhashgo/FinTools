@@ -62,6 +62,8 @@ OP_TO_FUNC = {
     "!=": "ne",
 }
 
+FUNC_TO_OP = {v: k for k, v in OP_TO_FUNC.items()}
+
 class LLMHidden: pass
 
 @dataclass
@@ -342,6 +344,16 @@ def _neg(x: AnyNumerical) -> pl.Expr:
         return pl.lit(-x)
     else:
         return x.cast(REAL).neg()
+
+@quant_func
+def _pos(x: AnyNumerical) -> pl.Expr:
+    """
+    Equivalent of unary plus operator +x
+    """
+    if not isinstance(x, pl.Expr):
+        return pl.lit(x)
+    else:
+        return x.cast(REAL)
 
 @quant_func
 def _add(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json, hashlib
 from .AST import Node, Field, Const, Call, ParamAssign
-from .registry import OPS, DATA_SCHEMA, ValidationError
+from .registry import OPS, DATA_SCHEMA, ValidationError, FUNC_TO_OP
 
 MAX_NODES = 200
 MAX_DEPTH = 30
@@ -94,3 +94,26 @@ def ast_to_canonical_json(node: Node) -> str:
 def ast_to_hash(node: Node) -> str:
     canonical_json = ast_to_canonical_json(node)
     return hashlib.sha1(canonical_json.encode('utf-8')).hexdigest()
+
+def ast_to_expression(node: Node) -> str:
+    if isinstance(node, Field):
+        return node.name
+    elif isinstance(node, Const):
+        if isinstance(node.value, str):
+            return repr(node.value)
+        else:
+            return str(node.value)
+    elif isinstance(node, Call):
+        if node.fn in FUNC_TO_OP or node.fn in {"neg", "pos"}:
+            op = FUNC_TO_OP.get(node.fn, node.fn)
+            if op == "neg": op = "-"
+            elif op == "pos": op = "+"
+            if len(node.args) == 1:
+                return f"{op}{ast_to_expression(node.args[0])}"
+            args_str = f" {op} ".join(ast_to_expression(arg) for arg in node.args)
+            return f"({args_str})"
+        else:
+            args_str = ", ".join(ast_to_expression(arg) for arg in node.args)
+            return f"{node.fn}({args_str})"
+    else:
+        raise ValueError(f"Unknown node type: {type(node)}")

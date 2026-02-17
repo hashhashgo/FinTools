@@ -175,6 +175,11 @@ class Parser:
             right = self.expr(25)
             return Call("neg", (right,), {})
         
+        elif k == "OPERATOR" and v == "+":
+            self.eat("OPERATOR", "+")
+            right = self.expr(25)
+            return Call("pos", (right,), {})
+        
         elif k == "LPAREN":
             self.eat("LPAREN")
             node = self.expr(0)
