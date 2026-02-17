@@ -1,6 +1,4 @@
-from dataclasses import dataclass
-from gc import collect
-from typing import List, Literal, Set, Iterable, Tuple, cast
+from typing import List, Literal, Set, Iterable, Tuple, cast, IO
 import polars as pl
 import numpy as np
 from .parser import Parser, Node
@@ -11,8 +9,10 @@ from .registry import ScheduleColume, Schedule, GroupBy
 from .config import REAL, INTEGER, STRING
 from datetime import date
 from pathlib import Path
+from importlib.resources import files
 import tqdm
 import json
+from os import PathLike
 
 import logging
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class QuantEngine:
         start_date: date = date(2014, 1, 1),
         val_start: date = date(2022, 1, 1),
         test_start: date = date(2024, 1, 1),
-        init_alphas: Iterable[str] | Path | None = None,
+        init_alphas: Iterable[str] | str | PathLike[str] | IO[str] | None = None,
         alphas_cache: Path | None = Path("./results/alphas.json"),
         alpha_records_cache: Path | None = Path("./results/alpha_records.parquet"),
         norm_alpha_cache: Path | None = Path("./results/alpha_cache.parquet"),
@@ -69,9 +69,13 @@ class QuantEngine:
         if init_alphas is not None:
             alphas: Set[str] = set()
             try:
-                if isinstance(init_alphas, Path):
+                if isinstance(init_alphas, (str, PathLike)):
+                    if init_alphas == "alpha101":
+                        init_alphas = cast(PathLike, files('fintools').joinpath('data/alpha101.txt'))
                     with open(init_alphas, 'r') as f:
                         alphas |= set(self.add(f.readlines()))
+                elif hasattr(init_alphas, 'readlines'):
+                    alphas |= set(self.add(cast(IO[str], init_alphas).readlines()))
                 else:
                     alphas |= set(self.add(list(init_alphas)))
             except Exception as e:
@@ -104,7 +108,7 @@ class QuantEngine:
         if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
         evaluated = self.evaluate(alphas=self.alpha_pool | {fid}, horizon=horizon, on='train')
 
-    def pool_relevance(self, fid: str, pool: Set[str] | None = None, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
+    def pool_relevance(self, fid: str, *, pool: Set[str] | None = None, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
         if pool is None:
             pool = self.alpha_pool
         if len(pool) == 0: return pl.DataFrame()

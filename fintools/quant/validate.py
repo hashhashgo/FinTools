@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json, hashlib
-from .AST import Node, Field, Const, Call
+from .AST import Node, Field, Const, Call, ParamAssign
 from .registry import OPS, DATA_SCHEMA, ValidationError
 
 MAX_NODES = 200
@@ -11,6 +11,8 @@ MAX_WINDOW = 2520
 def normalize(node: Node) -> Node:
     if isinstance(node, (Field, Const)):
         return node
+    elif isinstance(node, ParamAssign):
+        return ParamAssign(name=node.name, value=normalize(node.value))
     assert isinstance(node, Call)
 
     if node.fn not in OPS:
@@ -21,8 +23,8 @@ def normalize(node: Node) -> Node:
     if not (spec.min_arity <= len(norm_args) <= spec.max_arity):
         raise ValidationError(f"Operator '{node.fn}' expects between {spec.min_arity} and {spec.max_arity} arguments, got {len(norm_args)}")
     
-    canon_args = spec.normalize(norm_args)
-    return Call(fn=node.fn, args=canon_args)
+    canon_args = spec.normalize(norm_args, node.kwargs)
+    return Call(fn=node.fn, args=canon_args, kwargs={})
 
 def _require_int_const(node: Node, what: str) -> int:
     if not isinstance(node, Const) or not isinstance(node.value, (float, int)):

@@ -81,8 +81,8 @@ if __name__ == "__main__":
     from pathlib import Path
 
     from fintools.quant.engine import QuantEngine
-    engine = QuantEngine(init_alphas=Path('tests/alpha101.txt'), fetch_new_data=False)
-    
+    engine = QuantEngine(init_alphas='alpha101', fetch_new_data=False)
+    engine.add('normalize(close * open, useStd=True, limit=0.0)')
 
     ########## auto test alpha101.txt ##########
     from watchdog.observers import Observer

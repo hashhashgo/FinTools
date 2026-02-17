@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Iterable, Tuple
-from .AST import Field, Const, Call, Node
+from .AST import Field, Const, Call, Node, ParamAssign
 from .registry import BP, OP_TO_FUNC
 
 
@@ -49,8 +49,9 @@ _token_re = re.compile(
         \d+           |            # Integer
         [A-Za-z_]\w*  |            # Identifier
         \"[^\"]*\"    |            # String literal
-        true | false  |            # Boolean literals
+        true | false | True | False |# Boolean literals
         >= | <= | == | != | > | < |# Comparison operators
+        =             |            # Assignment operator
         \*\*          |            # power
         [+\-*/(),]                 # Operators and parentheses
     )\s*""",
@@ -65,6 +66,7 @@ def tokenize(expression: str) -> Iterable[Tuple[str, str]]:
         match = _token_re.match(expression, pos)
         if not match:
             match = _unexpected_char_re.match(expression, pos)
+            assert match is not None, "Unexpected end of input"
             pos = match.end() - 1
             raise ParserError(f"Unexpected character at position {pos}: '{expression[pos]}'", expression, pos)
         tok = match.group(1)
@@ -75,10 +77,12 @@ def tokenize(expression: str) -> Iterable[Tuple[str, str]]:
             yield ("INTEGER", tok)
         elif re.fullmatch(r'"[^"]*"', tok):
             yield ("STRING", tok[1:-1])
-        elif tok in {"true", "false"}:
-            yield ("BOOLEAN", tok)
+        elif tok in {"true", "false", "True", "False"}:
+            yield ("BOOLEAN", tok.lower())
         elif re.fullmatch(r"[A-Za-z_]\w*", tok):
             yield ("IDENTIFIER", tok)
+        elif tok == "=":
+            yield ("ASSIGN", tok)
         elif tok == "(":
             yield ("LPAREN", tok)
         elif tok == ")":
@@ -124,6 +128,13 @@ class Parser:
         lhs = self.nud()
 
         while True:
+            if self.kind() == "ASSIGN":
+                self.eat("ASSIGN")
+                rhs = self.expr(0)
+                if not isinstance(lhs, Field):
+                    raise ParserError("Left-hand side of assignment must be an identifier")
+                return ParamAssign(lhs.name, rhs)
+
             if self.kind() != "OPERATOR":
                 break
 
@@ -137,7 +148,7 @@ class Parser:
 
             self.eat("OPERATOR", op)
             rhs = self.expr(rbp)
-            lhs = Call(OP_TO_FUNC[op], (lhs, rhs))
+            lhs = Call(OP_TO_FUNC[op], (lhs, rhs), {})
         
         return lhs
         
@@ -162,7 +173,7 @@ class Parser:
         elif k == "OPERATOR" and v == "-":
             self.eat("OPERATOR", "-")
             right = self.expr(25)
-            return Call("neg", (right,))
+            return Call("neg", (right,), {})
         
         elif k == "LPAREN":
             self.eat("LPAREN")
@@ -175,15 +186,22 @@ class Parser:
             if self.kind() == "LPAREN":
                 self.eat("LPAREN")
                 args = []
+                kwargs = {}
                 if self.kind() != "RPAREN":
                     while True:
-                        args.append(self.expr(0))
+                        arg = self.expr(0)
+                        if isinstance(arg, ParamAssign):
+                            kwargs[arg.name] = arg.value
+                        elif len(kwargs) == 0:
+                            args.append(arg)
+                        else:
+                            raise ParserError("Positional arguments cannot follow keyword arguments")
                         if self.kind() == "COMMA":
                             self.eat("COMMA")
                         else:
                             break
                 self.eat("RPAREN")
-                return Call(v, tuple(args))
+                return Call(v, tuple(args), kwargs)
             else:
                 return Field(v)
         else:

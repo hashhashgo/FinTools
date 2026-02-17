@@ -70,7 +70,7 @@ class OpSpec:
     min_arity: int
     max_arity: int
     field_type: Tuple[type, ...]
-    normalize: Callable[[Tuple[Node, ...]], Tuple[Node, ...]]
+    normalize: Callable[[Tuple[Node, ...], Dict[str, Node]], Tuple[Node, ...]]
     func: ScheduleFunc | None
     hint_func_doc: str
     hint_func_sig: str
@@ -105,9 +105,13 @@ def register_func(func: Callable[..., pl.Expr]) -> Callable[..., pl.Expr]:
             fileds.append(dtype)
     field_type = tuple(fileds)
     
-    def norm_args(args: Tuple[Node, ...]) -> Tuple[Node, ...]:
+    def norm_args(args: Tuple[Node, ...], kwargs: Dict[str, Node]) -> Tuple[Node, ...]:
         args_list = list(args)
         for i, p in enumerate(params.values()):
+            if p.name in kwargs:
+                if p.kind == p.POSITIONAL_ONLY:
+                    raise ValidationError(f"Parameter '{p.name}' of function '{name}' is positional-only and cannot be passed as a keyword argument")
+                args_list.insert(i, kwargs[p.name])
             if i >= len(args_list):
                 if p.default is not p.empty:
                     default_value = p.default
