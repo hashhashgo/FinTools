@@ -879,7 +879,7 @@ def _ts_regression(y: pl.Expr, x: pl.Expr, d: Annotated[int, 'lookback'], lag: A
     return pl.when((n >= 2) & denom.abs().gt(eps)).then(ret).otherwise(None)
 
 @quant_ts_func
-def _ts_scale(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[float, 'constant'] = 0) -> pl.Expr:
+def _ts_scale(x: pl.Expr, d: Annotated[int, 'lookback'], constant: Annotated[float, 'constant'] = 0.0) -> pl.Expr:
     """
     Scale x over the past d days to the range [0, 1] + constant.
     """
@@ -1014,44 +1014,44 @@ def _stddev(*args: pl.Expr) -> pl.Expr:
 
 # ################ Group Operators ################
 @quant_eager_func
-def _group_mean(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+def _group_mean(x: pl.Expr, group: Annotated[pl.Expr, 'group by']) -> pl.Expr:
     """
     Mean of x within each group for each date
     """
-    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
+    # if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     return x.mean().over([DATE_COL, group])
 
 @quant_eager_func
-def _group_neutralize(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+def _group_neutralize(x: pl.Expr, group: Annotated[pl.Expr, 'group by']) -> pl.Expr:
     """
     Neutralize x within each group for each date by subtracting the group mean and dividing by the group standard deviation.
     """
-    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
+    # if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     ret = (x - x.mean()) / x.std(ddof=0)
     return pl.when(x.len() == 1).then(0.0).otherwise(ret).over([DATE_COL, group])
 
 @quant_eager_func
-def _group_rank(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+def _group_rank(x: pl.Expr, group: Annotated[pl.Expr, 'group by']) -> pl.Expr:
     """
     Rank of x within each group for each date, normalized to [0, 1]
     """
-    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
+    # if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     return pl.when(x.len() == 1).then(0.0).otherwise((x.rank(method='min') - 1) / (x.len() - 1)).over([DATE_COL, group])
 
 @quant_eager_func
-def _group_scale(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+def _group_scale(x: pl.Expr, group: Annotated[pl.Expr, 'group by']) -> pl.Expr:
     """
     Scale x within each group for each date to the range [0, 1]
     """
-    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
+    # if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     minx = x.min()
     maxx = x.max()
     return pl.when(x.len() == 1).then(0.0).otherwise((x - minx) / (maxx - minx)).over([DATE_COL, group])
 
 @quant_eager_func
-def _group_zscore(x: pl.Expr, group: Annotated[str, 'group by']) -> pl.Expr:
+def _group_zscore(x: pl.Expr, group: Annotated[pl.Expr, 'group by']) -> pl.Expr:
     """
     Z-score normalization of x within each group for each date
     """
-    if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
+    # if group not in DATA_SCHEMA: raise ValidationError(f"Cannot group by {group}")
     return pl.when(x.len() == 1).then(0.0).otherwise(((x - x.mean()) / x.std(ddof=0))).over([DATE_COL, group])

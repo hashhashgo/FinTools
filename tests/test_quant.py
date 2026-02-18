@@ -83,6 +83,7 @@ if __name__ == "__main__":
     from fintools.quant.engine import QuantEngine
     engine = QuantEngine(init_alphas='alpha101', fetch_new_data=False)
     engine.add('normalize(close * open, useStd=True, limit=0.0)')
+    engine.add('group_zscore(ts_scale(ts_corr(ts_delta(close, 5), volume, 21), 63), industry)')
 
     ########## auto test alpha101.txt ##########
     from watchdog.observers import Observer
