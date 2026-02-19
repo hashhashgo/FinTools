@@ -48,7 +48,7 @@ _token_re = re.compile(
         \d+\.\d* | \.\d+ |         # Real
         \d+           |            # Integer
         [A-Za-z_]\w*  |            # Identifier
-        \"[^\"]*\"    |            # String literal
+        \"[^\"]*\" | \'[^\']*\' |  # String literal
         true | false | True | False |# Boolean literals
         >= | <= | == | != | > | < |# Comparison operators
         =             |            # Assignment operator
@@ -75,7 +75,7 @@ def tokenize(expression: str) -> Iterable[Tuple[str, str]]:
             yield ("REAL", tok)
         elif re.fullmatch(r"\d+", tok):
             yield ("INTEGER", tok)
-        elif re.fullmatch(r'"[^"]*"', tok):
+        elif re.fullmatch(r'"[^"]*"|\'[^\']*\'', tok):
             yield ("STRING", tok[1:-1])
         elif tok in {"true", "false", "True", "False"}:
             yield ("BOOLEAN", tok.lower())
