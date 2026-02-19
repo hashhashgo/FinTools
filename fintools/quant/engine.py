@@ -38,6 +38,7 @@ class QuantEngine:
         self.val_start = val_start
         self.test_start = test_start
         self._lazy_res_cols: List[pl.LazyFrame] = []
+        self._lazy_res_cols_fids: Set[str] = set()
         self._norm_alpha = self.dataset[['date', 'symbol']]
         self._raw_alpha = self.dataset[['date', 'symbol']]
         self.raw_values_cache = raw_values_cache
@@ -453,6 +454,7 @@ class QuantEngine:
         for i in tqdm.trange(0, len(self._lazy_res_cols), max_parallel):
             self._raw_alpha = pl.concat([self._raw_alpha.lazy(), *self._lazy_res_cols[i:i+max_parallel]], how='horizontal', parallel=True).collect()
         self._lazy_res_cols = []
+        self._lazy_res_cols_fids = set()
         if self.raw_values_cache is not None:
             self.raw_values_cache.parent.mkdir(parents=True, exist_ok=True)
             self._raw_alpha.write_parquet(self.raw_values_cache)
@@ -471,9 +473,10 @@ class QuantEngine:
             aid = ast_to_hash(ast)
             fids.append(aid)
             self._all_alphas[aid] = ast_to_expression(ast)
-            if aid in self._raw_alpha.columns: continue
+            if aid in self._raw_alpha.columns or aid in self._lazy_res_cols_fids: continue
             col = self.ast_to_col(lazy_df, aid, ast)
             self._lazy_res_cols.append(col)
+            self._lazy_res_cols_fids.add(aid)
         with open("./results/alphas.json", 'w') as f:
             json.dump(self._all_alphas, f, indent=2)
         return fids
