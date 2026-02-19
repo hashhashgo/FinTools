@@ -108,21 +108,132 @@ class QuantEngine:
         if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
         evaluated = self.evaluate(alphas=self.alpha_pool | {fid}, horizon=horizon, on='train')
 
-    def pool_relevance(self, fid: str, *, pool: Set[str] | None = None, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
+    # def pool_relevance(self, fid: str, *, pool: Set[str] | None = None, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
+    #     if pool is None:
+    #         pool = self.alpha_pool
+    #     if len(pool) == 0: return pl.DataFrame()
+    #     if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
+    #     if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
+    #     for fid2 in pool:
+    #         if fid2 not in self._all_alphas: raise ValueError(f"Alpha with fid {fid2} not found")
+    #         if fid2 not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid2}")
+    #     normalized_alpha = self.alpha().lazy().filter(self.__timerange_expr__(on)).select(['date', 'symbol', fid, *pool])
+    #     relevance = normalized_alpha.select([
+    #         pl.corr(pl.col(fid), pl.col(fid2), method='spearman').over('date')\
+    #             .drop_nans().drop_nulls().mean().cast(REAL).alias(fid2) for fid2 in pool
+    #     ])
+    #     return relevance.collect()
+    
+    def pool_relevance_batch(
+        self,
+        new_fids: list[str],
+        *,
+        pool: Set[str] | None = None,
+        on: Literal["train", "val", "test"] = "train",
+        date_equal_weight: bool = True,   # True: 每个date等权平均；False: 按有效样本数加权
+    ) -> pl.DataFrame:
         if pool is None:
             pool = self.alpha_pool
-        if len(pool) == 0: return pl.DataFrame()
-        if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
-        if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
-        for fid2 in pool:
-            if fid2 not in self._all_alphas: raise ValueError(f"Alpha with fid {fid2} not found")
-            if fid2 not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid2}")
-        normalized_alpha = self.alpha().lazy().filter(self.__timerange_expr__(on)).select(['date', 'symbol', fid, *pool])
-        relevance = normalized_alpha.select([
-            pl.corr(pl.col(fid), pl.col(fid2), method='spearman').over('date')\
-                .drop_nans().drop_nulls().mean().cast(REAL).alias(fid2) for fid2 in pool
-        ])
-        return relevance.collect()
+        pool = set(pool)
+
+        if not new_fids or not pool:
+            # 输出格式：pool做行
+            return pl.DataFrame({"pool_fid": sorted(pool), **{nf: [] for nf in new_fids}})
+
+        # 校验列存在
+        cols = set(self.alpha().columns)
+        for fid in list(pool) + list(new_fids):
+            if fid not in self._all_alphas:
+                raise ValueError(f"Alpha with fid {fid} not found")
+            if fid not in cols:
+                raise RuntimeError(f"Alpha should be computed but not found in alpha dataframe. fid: {fid}")
+
+        # 防止新因子里有跟pool重复（会导致列重复）
+        pool_only = [f for f in sorted(pool) if f not in set(new_fids)]
+        if not pool_only:
+            # pool 全被 new 覆盖了，那行集合为空就没意义；这里按你的需求也可以改成仍然输出
+            pool_only = sorted(pool)
+
+        all_cols = pool_only + new_fids
+
+        lf = (
+            self.alpha()
+            .lazy()
+            .filter(self.__timerange_expr__(on))
+            .select(["date", "symbol", *all_cols])
+        )
+
+        # 1) Spearman：先 rank（按date横截面）
+        lf = lf.with_columns(
+            pl.col(all_cols)
+            .rank(method="average")
+            .over("date")
+            .cast(REAL)
+        )
+
+        # 2) 再对rank做zscore（按date横截面）
+        lf = lf.with_columns(
+            (
+                (pl.col(all_cols) - pl.col(all_cols).mean().over("date"))
+                / pl.col(all_cols).std(ddof=1).over("date")
+            ).cast(REAL)
+        )
+
+        df = lf.collect()
+
+        # 3) 按 date 分块做矩阵相关
+        # partition_by 在 Rust 侧分块，通常比 python groupby 快/省事
+        parts = df.partition_by("date", as_dict=False)
+
+        N = len(pool_only)
+        M = len(new_fids)
+
+        sum_corr = np.zeros((N, M), dtype=np.float64)
+        cnt = np.zeros((N, M), dtype=np.int32)
+
+        for dfi in parts:
+            A = dfi.select(pool_only).to_numpy()  # (n_symbol, N)
+            B = dfi.select(new_fids).to_numpy()   # (n_symbol, M)
+
+            # mask：有效值（排除 null/NaN）
+            Am = np.isfinite(A)
+            Bm = np.isfinite(B)
+
+            # NaN 置0，方便 matmul；有效样本数用 mask 来算
+            A0 = np.where(Am, A, 0.0)
+            B0 = np.where(Bm, B, 0.0)
+
+            # numerator = sum(zA * zB) over symbols
+            num = A0.T @ B0  # (N, M)
+
+            # valid_n = count(valid) over symbols
+            valid_n = (Am.astype(np.int32).T) @ (Bm.astype(np.int32))  # (N, M)
+
+            # 相关：cov(zA,zB)= sum(zA*zB)/(n-1) （因为zscore用ddof=1）
+            denom = valid_n - 1
+            ok = denom > 0
+
+            corr = np.full((N, M), np.nan, dtype=np.float64)
+            corr[ok] = num[ok] / denom[ok]
+
+            if date_equal_weight:
+                # 每个date等权平均（与你原来的 over('date').mean() 更接近）
+                sum_corr[ok] += corr[ok]
+                cnt[ok] += 1
+            else:
+                # 按有效样本数加权：权重=denom（或valid_n都行）
+                w = denom.astype(np.float64)
+                sum_corr[ok] += corr[ok] * w[ok]
+                cnt[ok] += w[ok].astype(np.int32)
+
+        out = sum_corr / np.where(cnt == 0, np.nan, cnt)
+
+        # 输出：行=pool因子，列=new因子
+        out_df = pl.DataFrame(out, schema=new_fids).with_columns(
+            pl.Series("pool_fid", pool_only)
+        ).select(["pool_fid", *new_fids])
+
+        return out_df
     
     def evaluate(self, alphas: Set[str] | None = None, horizon: int = 5, rebalance_period: int = 7, rebalance_delay: int = 1, long_pct: float = 0.8, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
         if alphas is None:
@@ -131,10 +242,8 @@ class QuantEngine:
         pending = alphas - evaluated
         if len(pending) == 0:
             return self._alpha_records.filter((pl.col('horizon') == horizon) & (pl.col('on') == on) & pl.col('fid').is_in(alphas))
-        # normalized_alpha = self.alpha().lazy().join(
-        normalized_alpha = self.alpha().select(['date', 'symbol', *pending]).join(
-            # self.dataset.lazy().with_columns(
-            self.dataset.with_columns(
+        normalized_alpha = self.alpha().lazy().select(['date', 'symbol', *pending]).join(
+            self.dataset.lazy().with_columns(
                 (pl.col('vwap').shift(-horizon) / (pl.col('vwap').shift(-1) + 1e-9) - 1).over('symbol').fill_null(0.0).alias(f'ret_h{horizon}')
             ).select(['date', 'symbol', f'ret_h{horizon}', 'buyable', 'sellable', 'returns']),
             on=['date', 'symbol'],
@@ -187,9 +296,6 @@ class QuantEngine:
             (pl.col(c).filter(pl.col(c) > 0).drop_nans().drop_nulls().count() / (pl.col(c).drop_nans().drop_nulls().count() + 1e-9)).cast(REAL).alias(c) for c in pending
         ).unpivot(value_name='ic_win_rate', variable_name='fid')
 
-        # excess_ann_ret = df_NAV.select(
-        #     (pl.col(fid).last()  / pl.len() * 252).alias(fid) for fid in pending
-        # ).unpivot(value_name='excess_ann_ret', variable_name='fid')
         excess_ann_ret = df_daily_ret.select(
             (((1 + pl.col(fid)) / (1 + pl.col('baseline_daily_return')) - 1).drop_nulls().mean() * (252)).alias(fid) for fid in pending
         ).unpivot(value_name='excess_ann_ret', variable_name='fid')
@@ -216,10 +322,8 @@ class QuantEngine:
             pl.lit(horizon).alias('horizon'),
             pl.lit(on).alias('on'),
         ).select(self._alpha_records.columns).cast(self._alpha_records.schema)
-        # self._alpha_records = pl.concat([self._alpha_records.lazy(), records], how='vertical')\
-        self._alpha_records = pl.concat([self._alpha_records, records], how='vertical')\
-            .unique(subset=['fid', 'horizon', 'on'], keep='last')
-            # .unique(subset=['fid', 'horizon', 'on'], keep='last').collect()
+        self._alpha_records = pl.concat([self._alpha_records.lazy(), records], how='vertical')\
+            .unique(subset=['fid', 'horizon', 'on'], keep='last').collect()
         if self.alpha_records_cache is not None:
             self.alpha_records_cache.parent.mkdir(parents=True, exist_ok=True)
             self._alpha_records.write_parquet(self.alpha_records_cache)
