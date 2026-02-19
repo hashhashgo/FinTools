@@ -45,7 +45,7 @@ class ParserError(Exception):
 
 _token_re = re.compile(
     r"""\s*(
-        \d+\.\d* | \.\d+ |         # Real
+        (?:\d+\.\d*|\.\d+)(?:[eE][+\-]?\d+)? | \d+[eE][+\-]?\d+ |# Real
         \d+           |            # Integer
         [A-Za-z_]\w*  |            # Identifier
         \"[^\"]*\" | \'[^\']*\' |  # String literal
@@ -71,7 +71,7 @@ def tokenize(expression: str) -> Iterable[Tuple[str, str]]:
             raise ParserError(f"Unexpected character at position {pos}: '{expression[pos]}'", expression, pos)
         tok = match.group(1)
         pos = match.end()
-        if re.fullmatch(r"\d+\.\d*|\.\d+", tok):
+        if re.fullmatch(r"(?:\d+\.\d*|\.\d+)(?:[eE][+\-]?\d+)?|\d+[eE][+\-]?\d+", tok):
             yield ("REAL", tok)
         elif re.fullmatch(r"\d+", tok):
             yield ("INTEGER", tok)

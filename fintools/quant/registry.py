@@ -356,18 +356,22 @@ def _pos(x: AnyNumerical) -> pl.Expr:
         return x.cast(REAL)
 
 @quant_func
-def _add(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
+def _add(*args: AnyNumerical) -> pl.Expr:
     """
     Equivalent of binary addition operator x + y
     """
-    if not isinstance(x, pl.Expr) and not isinstance(y, pl.Expr):
-        return pl.lit(x + y)
-    elif not isinstance(x, pl.Expr):
-        return pl.lit(x) + y
-    elif not isinstance(y, pl.Expr):
-        return x + pl.lit(y)
+    if not args:
+        return pl.lit(0)
+    if not isinstance(args[0], pl.Expr):
+        result = pl.lit(args[0])
     else:
-        return x + y
+        result = args[0]
+    for arg in args[1:]:
+        if not isinstance(arg, pl.Expr):
+            result = result + pl.lit(arg)
+        else:
+            result = result + arg
+    return result
 
 @quant_func
 def _sub(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
@@ -384,18 +388,22 @@ def _sub(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
         return x - y
 
 @quant_func
-def _mul(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:
+def _mul(*args: AnyNumerical) -> pl.Expr:
     """
     Equivalent of binary multiplication operator x * y
     """
-    if not isinstance(x, pl.Expr) and not isinstance(y, pl.Expr):
-        return pl.lit(x * y)
-    elif not isinstance(x, pl.Expr):
-        return pl.lit(x) * y
-    elif not isinstance(y, pl.Expr):
-        return x * pl.lit(y)
+    if not args:
+        return pl.lit(1)
+    if not isinstance(args[0], pl.Expr):
+        result = pl.lit(args[0])
     else:
-        return x * y
+        result = args[0]
+    for arg in args[1:]:
+        if not isinstance(arg, pl.Expr):
+            result = result * pl.lit(arg)
+        else:
+            result = result * arg
+    return result
 
 @quant_func
 def _div(x: AnyNumerical, y: AnyNumerical) -> pl.Expr:

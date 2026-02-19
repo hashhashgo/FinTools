@@ -1,4 +1,4 @@
-from typing import List, Literal, Set, Iterable, Tuple, cast, IO
+from typing import Dict, List, Literal, Set, Iterable, Tuple, cast, IO
 import polars as pl
 import numpy as np
 from .parser import Parser, Node
@@ -63,7 +63,7 @@ class QuantEngine:
         ])
         if not fetch_new_data and alpha_records_cache is not None and alpha_records_cache.exists():
             self._alpha_records = pl.read_parquet(alpha_records_cache)
-        self._all_alphas = {}
+        self._all_alphas: Dict[str, str] = {}
         if not fetch_new_data and alphas_cache is not None and alphas_cache.exists():
             with open(alphas_cache, 'r') as f:
                 self._all_alphas = json.load(f)
@@ -125,7 +125,7 @@ class QuantEngine:
         *,
         relevance_similar_threshold: float = 0.5,
         relevance_same_threshold: float = 0.8,
-        horizon: int = 5,
+        top_k: int = 5,
         pool: Set[str] | None = None,
         on: Literal["train", "val", "test"] = "train",
         date_equal_weight: bool = True,   # True: 每个date等权平均；False: 按有效样本数加权
@@ -179,8 +179,8 @@ class QuantEngine:
 
         bad_fids = set(
             rel_similar.with_columns([
-                pl.col("ic_mean").abs().min().over('new_fid').alias("min_abs_ic"),
-                pl.col("excess_sharpe").abs().min().over('new_fid').alias("min_abs_excess_sharpe"),
+                pl.col("ic_mean").abs().top_k(top_k).min().over('new_fid').alias("min_abs_ic"),
+                pl.col("excess_sharpe").abs().top_k(top_k).min().over('new_fid').alias("min_abs_excess_sharpe"),
             ]).filter(
                 (pl.col('ic_mean_new').abs() < pl.col('min_abs_ic')) &
                 (pl.col('excess_sharpe_new').abs() < pl.col('min_abs_excess_sharpe'))
@@ -191,8 +191,8 @@ class QuantEngine:
 
         drop_fids = set(
             rel_same.with_columns([
-                pl.col("ic_mean_new").abs().min().over('pool_fid').alias("min_abs_ic"),
-                pl.col("excess_sharpe_new").abs().min().over('pool_fid').alias("min_abs_excess_sharpe"),
+                pl.col("ic_mean_new").abs().top_k(top_k).min().over('pool_fid').alias("min_abs_ic"),
+                pl.col("excess_sharpe_new").abs().top_k(top_k).min().over('pool_fid').alias("min_abs_excess_sharpe"),
             ]).filter(
                 (pl.col('ic_mean').abs() < pl.col('min_abs_ic')) &
                 (pl.col('excess_sharpe').abs() < pl.col('min_abs_excess_sharpe'))
