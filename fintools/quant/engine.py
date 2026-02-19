@@ -91,6 +91,7 @@ class QuantEngine:
                 logger.warning(f"Alpha with fid {ea} has invalid IC, and will not be added to the pool. Expr: {self._all_alphas.get(ea, 'unknown')}")
                 alphas.discard(ea)
             self.alpha_pool |= alphas
+            self.alpha_pool_cache = alpha_pool_cache
             if alpha_pool_cache is not None:
                 with open(alpha_pool_cache, 'w') as f:
                     for fid in sorted(self.alpha_pool):
@@ -111,11 +112,103 @@ class QuantEngine:
         start, end = self.__timerange__(on)
         return (pl.col('date') >= start) & (pl.col('date') < end)
 
-    def pool_add(self, fid: str, horizon: int = 5):
-        if fid in self.alpha_pool: return
-        if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
-        if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
-        evaluated = self.evaluate(alphas=self.alpha_pool | {fid}, horizon=horizon, on='train')
+    # def pool_add(self, fid: str, horizon: int = 5):
+    #     if fid in self.alpha_pool: return
+    #     if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
+    #     if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
+    #     evaluated = self.evaluate(alphas=self.alpha_pool | {fid}, horizon=horizon, on='train')
+
+    def pool_add_batch(
+        self,
+        new_fids: Iterable[str] | str,
+        *,
+        relevance_similar_threshold: float = 0.5,
+        relevance_same_threshold: float = 0.8,
+        horizon: int = 5,
+        pool: Set[str] | None = None,
+        on: Literal["train", "val", "test"] = "train",
+        date_equal_weight: bool = True,   # True: 每个date等权平均；False: 按有效样本数加权
+    ) -> Tuple[Set[str], Set[str], Set[str]]:
+        """
+        Add a batch of new alpha FIDs to the pool, evaluating their relevance and performance.
+
+        Returns a tuple of three sets:
+        - good_fids: FIDs that are added to the pool
+        - pool: Updated pool after adding good_fids and removing drop_fids
+        - drop_fids: FIDs that are removed from the pool due to low relevance or performance
+        """
+        apply_to_pool = False
+        if pool is None:
+            pool = self.alpha_pool
+            apply_to_pool = True
+        pool = set(pool)
+
+        if isinstance(new_fids, str):
+            new_fids = [new_fids]
+
+        new_fids = set(new_fids) - pool
+        if not new_fids:
+            return set(), pool, set()
+
+        relevance_df = self.pool_relevance_batch(
+            new_fids=new_fids,
+            pool=pool,
+            on=on,
+            date_equal_weight=date_equal_weight,
+        ).unpivot(
+            index="pool_fid",
+            variable_name="new_fid",
+            value_name="relevance"
+        ).drop_nans("relevance")
+        relevance_df = relevance_df.join(
+            self.evaluate(pool),
+            left_on='pool_fid',
+            right_on='fid',
+            how='left'
+        ).join(
+            self.evaluate(new_fids),
+            left_on='new_fid',
+            right_on='fid',
+            how='left',
+            suffix="_new"
+        )
+
+        rel_similar = relevance_df.filter(pl.col('relevance') >= relevance_similar_threshold)
+        rel_same = relevance_df.filter(pl.col('relevance') >= relevance_same_threshold)
+
+        bad_fids = set(
+            rel_similar.with_columns([
+                pl.col("ic_mean").abs().min().over('new_fid').alias("min_abs_ic"),
+                pl.col("excess_sharpe").abs().min().over('new_fid').alias("min_abs_excess_sharpe"),
+            ]).filter(
+                (pl.col('ic_mean_new').abs() < pl.col('min_abs_ic')) &
+                (pl.col('excess_sharpe_new').abs() < pl.col('min_abs_excess_sharpe'))
+            ).select('new_fid').unique().to_series()
+        )
+
+        good_fids = set(new_fids) - bad_fids
+
+        drop_fids = set(
+            rel_same.with_columns([
+                pl.col("ic_mean_new").abs().min().over('pool_fid').alias("min_abs_ic"),
+                pl.col("excess_sharpe_new").abs().min().over('pool_fid').alias("min_abs_excess_sharpe"),
+            ]).filter(
+                (pl.col('ic_mean').abs() < pl.col('min_abs_ic')) &
+                (pl.col('excess_sharpe').abs() < pl.col('min_abs_excess_sharpe'))
+            ).select('pool_fid').unique().to_series()
+        )
+
+        pool = (pool - drop_fids) | good_fids
+
+        if apply_to_pool:
+            self.alpha_pool = pool
+            if self.alpha_pool_cache is not None:
+                with open(self.alpha_pool_cache, 'w') as f:
+                    for fid in sorted(self.alpha_pool):
+                        assert fid in self._all_alphas, f"fid {fid} not found in _all_alphas"
+                        f.write(self._all_alphas.get(fid, fid) + '\n')
+        
+        return good_fids, pool, drop_fids
 
     # def pool_relevance(self, fid: str, *, pool: Set[str] | None = None, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
     #     if pool is None:
@@ -135,7 +228,7 @@ class QuantEngine:
     
     def pool_relevance_batch(
         self,
-        new_fids: list[str],
+        new_fids: Iterable[str] | str,
         *,
         pool: Set[str] | None = None,
         on: Literal["train", "val", "test"] = "train",
@@ -144,6 +237,10 @@ class QuantEngine:
         if pool is None:
             pool = self.alpha_pool
         pool = set(pool)
+
+        if isinstance(new_fids, str):
+            new_fids = set([new_fids])
+        new_fids = set(new_fids)
 
         if not new_fids or not pool:
             # 输出格式：pool做行
@@ -163,6 +260,7 @@ class QuantEngine:
             # pool 全被 new 覆盖了，那行集合为空就没意义；这里按你的需求也可以改成仍然输出
             pool_only = sorted(pool)
 
+        new_fids = list(new_fids)
         all_cols = pool_only + new_fids
 
         lf = (
