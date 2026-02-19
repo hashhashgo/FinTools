@@ -27,6 +27,7 @@ class QuantEngine:
         test_start: date = date(2024, 1, 1),
         init_alphas: Iterable[str] | str | PathLike[str] | IO[str] | None = None,
         alphas_cache: Path | None = Path("./results/alphas.json"),
+        alpha_pool_cache: Path | None = Path("./results/alpha_pool.txt"),
         alpha_records_cache: Path | None = Path("./results/alpha_records.parquet"),
         norm_alpha_cache: Path | None = Path("./results/alpha_cache.parquet"),
         raw_values_cache: Path | None = Path("./results/raw_alpha_values.parquet"),
@@ -66,6 +67,9 @@ class QuantEngine:
             with open(alphas_cache, 'r') as f:
                 self._all_alphas = json.load(f)
         self.alpha_pool = set()
+        if alpha_pool_cache is not None and alpha_pool_cache.exists():
+            with open(alpha_pool_cache, 'r') as f:
+                self.alpha_pool = set(self.add(f.readlines()))
         if init_alphas is not None:
             alphas: Set[str] = set()
             try:
@@ -87,6 +91,11 @@ class QuantEngine:
                 logger.warning(f"Alpha with fid {ea} has invalid IC, and will not be added to the pool. Expr: {self._all_alphas.get(ea, 'unknown')}")
                 alphas.discard(ea)
             self.alpha_pool |= alphas
+            if alpha_pool_cache is not None:
+                with open(alpha_pool_cache, 'w') as f:
+                    for fid in sorted(self.alpha_pool):
+                        assert fid in self._all_alphas, f"fid {fid} not found in _all_alphas"
+                        f.write(self._all_alphas.get(fid, fid) + '\n')
     
     def __timerange__(self, on: Literal['train', 'val', 'test']) -> tuple[date, date]:
         if on == 'train':
