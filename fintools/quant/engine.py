@@ -106,7 +106,7 @@ class QuantEngine:
         if self.alpha_pool_cache is not None and self.alpha_pool_cache.exists():
             with open(self.alpha_pool_cache, 'r') as f:
                 self.alpha_pool = set(self.add(f.readlines()))
-        self.add(list(self.alpha_pool))
+        self.add([self._all_alphas.get(alpha, alpha) for alpha in self.alpha_pool])
         self.alpha()
         self._lazy_res_cols = []
         self._lazy_res_cols_fids = set()
