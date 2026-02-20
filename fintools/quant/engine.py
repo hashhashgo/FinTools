@@ -64,10 +64,12 @@ class QuantEngine:
         if not fetch_new_data and alpha_records_cache is not None and alpha_records_cache.exists():
             self._alpha_records = pl.read_parquet(alpha_records_cache)
         self._all_alphas: Dict[str, str] = {}
+        self.alphas_cache = alphas_cache
         if not fetch_new_data and alphas_cache is not None and alphas_cache.exists():
             with open(alphas_cache, 'r') as f:
                 self._all_alphas = json.load(f)
-        self.alpha_pool = set()
+        self.alpha_pool: Set[str] = set()
+        self.alpha_pool_cache = alpha_pool_cache
         if alpha_pool_cache is not None and alpha_pool_cache.exists():
             with open(alpha_pool_cache, 'r') as f:
                 self.alpha_pool = set(self.add(f.readlines()))
@@ -98,6 +100,18 @@ class QuantEngine:
                     for fid in sorted(self.alpha_pool):
                         assert fid in self._all_alphas, f"fid {fid} not found in _all_alphas"
                         f.write(self._all_alphas.get(fid, fid) + '\n')
+
+    def clear_cache(self):
+        self.alpha_pool = set()
+        if self.alpha_pool_cache is not None and self.alpha_pool_cache.exists():
+            with open(self.alpha_pool_cache, 'r') as f:
+                self.alpha_pool = set(self.add(f.readlines()))
+        self.add(list(self.alpha_pool))
+        self.alpha()
+        self._lazy_res_cols = []
+        self._lazy_res_cols_fids = set()
+        self._norm_alpha = self._norm_alpha.select(['date', 'symbol', *self.alpha_pool])
+        self._raw_alpha = self._raw_alpha.select(['date', 'symbol', *self.alpha_pool])
     
     def __timerange__(self, on: Literal['train', 'val', 'test']) -> tuple[date, date]:
         if on == 'train':
@@ -345,7 +359,7 @@ class QuantEngine:
     
     def evaluate(self, alphas: Set[str] | None = None, horizon: int = 5, rebalance_period: int = 7, rebalance_delay: int = 1, long_pct: float = 0.8, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
         if alphas is None:
-            alphas = set(self._all_alphas.keys())
+            alphas = self.alpha_pool
         evaluated = set(self._alpha_records.filter((pl.col('horizon') == horizon) & (pl.col('on') == on))['fid'].to_list())
         pending = alphas - evaluated
         if len(pending) == 0:
@@ -445,7 +459,8 @@ class QuantEngine:
         res = self.normalize_alpha(raw_alpha.lazy(), cols=list(calc_cols))
         self._norm_alpha = pl.concat([self._norm_alpha.lazy(), res.select(list(calc_cols))], how='horizontal', parallel=True).collect()
         if self.norm_alpha_cache is not None:
-            self._norm_alpha.write_parquet(self.norm_alpha_cache)
+            self.norm_alpha_cache.parent.mkdir(parents=True, exist_ok=True)
+            self._norm_alpha.select('date', 'symbol', *self.alpha_pool).write_parquet(self.norm_alpha_cache)
         return self._norm_alpha
     
     def raw_alpha(self, max_parallel: int | None = None) -> pl.DataFrame:
@@ -457,7 +472,7 @@ class QuantEngine:
         self._lazy_res_cols_fids = set()
         if self.raw_values_cache is not None:
             self.raw_values_cache.parent.mkdir(parents=True, exist_ok=True)
-            self._raw_alpha.write_parquet(self.raw_values_cache)
+            self._raw_alpha.select('date', 'symbol', *self.alpha_pool).write_parquet(self.raw_values_cache)
         return self._raw_alpha
 
     def add(self, expressions: List[str] | str) -> List[str]:
@@ -477,8 +492,9 @@ class QuantEngine:
             col = self.ast_to_col(lazy_df, aid, ast)
             self._lazy_res_cols.append(col)
             self._lazy_res_cols_fids.add(aid)
-        with open("./results/alphas.json", 'w') as f:
-            json.dump(self._all_alphas, f, indent=2)
+        if self.alphas_cache is not None:
+            with open(self.alphas_cache, 'w') as f:
+                json.dump(self._all_alphas, f, indent=2)
         return fids
 
     def plot_top_20_backtest(
