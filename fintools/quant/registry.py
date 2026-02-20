@@ -31,7 +31,7 @@ DATA_SCHEMA: pl.Schema = pl.Schema({
     'returns': REAL,
     'vwap': REAL,
     'cap': REAL,
-    'industry': STRING
+    'industry': INTEGER
 })
 
 BP = {

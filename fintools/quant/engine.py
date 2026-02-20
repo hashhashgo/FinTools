@@ -73,7 +73,7 @@ class QuantEngine:
         if alpha_pool_cache is not None and alpha_pool_cache.exists():
             with open(alpha_pool_cache, 'r') as f:
                 self.alpha_pool = set(self.add(f.readlines()))
-        if init_alphas is not None:
+        if init_alphas is not None and len(self.alpha_pool) == 0:
             alphas: Set[str] = set()
             try:
                 if isinstance(init_alphas, (str, PathLike)):
@@ -110,8 +110,9 @@ class QuantEngine:
         self.alpha()
         self._lazy_res_cols = []
         self._lazy_res_cols_fids = set()
-        self._norm_alpha = self._norm_alpha.select(['date', 'symbol', *self.alpha_pool])
-        self._raw_alpha = self._raw_alpha.select(['date', 'symbol', *self.alpha_pool])
+        self._norm_alpha = self._norm_alpha.select(['date', 'symbol', *self.alpha_pool]).rechunk()
+        self._raw_alpha = self._raw_alpha.select(['date', 'symbol', *self.alpha_pool]).rechunk()
+        self._alpha_records = self._alpha_records.rechunk()
     
     def __timerange__(self, on: Literal['train', 'val', 'test']) -> tuple[date, date]:
         if on == 'train':
@@ -126,12 +127,6 @@ class QuantEngine:
     def __timerange_expr__(self, on: Literal['train', 'val', 'test']) -> pl.Expr:
         start, end = self.__timerange__(on)
         return (pl.col('date') >= start) & (pl.col('date') < end)
-
-    # def pool_add(self, fid: str, horizon: int = 5):
-    #     if fid in self.alpha_pool: return
-    #     if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
-    #     if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
-    #     evaluated = self.evaluate(alphas=self.alpha_pool | {fid}, horizon=horizon, on='train')
 
     def pool_add_batch(
         self,
@@ -225,22 +220,6 @@ class QuantEngine:
         
         return good_fids, pool, drop_fids
 
-    # def pool_relevance(self, fid: str, *, pool: Set[str] | None = None, on: Literal['train', 'val', 'test'] = 'train') -> pl.DataFrame:
-    #     if pool is None:
-    #         pool = self.alpha_pool
-    #     if len(pool) == 0: return pl.DataFrame()
-    #     if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
-    #     if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
-    #     for fid2 in pool:
-    #         if fid2 not in self._all_alphas: raise ValueError(f"Alpha with fid {fid2} not found")
-    #         if fid2 not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid2}")
-    #     normalized_alpha = self.alpha().lazy().filter(self.__timerange_expr__(on)).select(['date', 'symbol', fid, *pool])
-    #     relevance = normalized_alpha.select([
-    #         pl.corr(pl.col(fid), pl.col(fid2), method='spearman').over('date')\
-    #             .drop_nans().drop_nulls().mean().cast(REAL).alias(fid2) for fid2 in pool
-    #     ])
-    #     return relevance.collect()
-    
     def pool_relevance_batch(
         self,
         new_fids: Iterable[str] | str,
@@ -313,7 +292,7 @@ class QuantEngine:
         sum_corr = np.zeros((N, M), dtype=np.float64)
         cnt = np.zeros((N, M), dtype=np.int32)
 
-        for dfi in parts:
+        for dfi in tqdm.tqdm(parts, desc="Calculate Relevance..."):
             A = dfi.select(pool_only).to_numpy()  # (n_symbol, N)
             B = dfi.select(new_fids).to_numpy()   # (n_symbol, M)
 
@@ -364,7 +343,9 @@ class QuantEngine:
         pending = alphas - evaluated
         if len(pending) == 0:
             return self._alpha_records.filter((pl.col('horizon') == horizon) & (pl.col('on') == on) & pl.col('fid').is_in(alphas))
+        # normalized_alpha = self.alpha().select(['date', 'symbol', *pending]).join(
         normalized_alpha = self.alpha().lazy().select(['date', 'symbol', *pending]).join(
+            # self.dataset.with_columns(
             self.dataset.lazy().with_columns(
                 (pl.col('vwap').shift(-horizon) / (pl.col('vwap').shift(-1) + 1e-9) - 1).over('symbol').fill_null(0.0).alias(f'ret_h{horizon}')
             ).select(['date', 'symbol', f'ret_h{horizon}', 'buyable', 'sellable', 'returns']),
@@ -444,6 +425,8 @@ class QuantEngine:
             pl.lit(horizon).alias('horizon'),
             pl.lit(on).alias('on'),
         ).select(self._alpha_records.columns).cast(self._alpha_records.schema)
+        # self._alpha_records = pl.concat([self._alpha_records, records], how='vertical')\
+        #     .unique(subset=['fid', 'horizon', 'on'], keep='last')
         self._alpha_records = pl.concat([self._alpha_records.lazy(), records], how='vertical')\
             .unique(subset=['fid', 'horizon', 'on'], keep='last').collect()
         if self.alpha_records_cache is not None:

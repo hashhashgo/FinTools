@@ -55,7 +55,7 @@ def validate(node: Node, depth = 0, allow_float_for_int=False) -> int:
                     raise ValidationError(f"{i}-th argument of '{node.fn}' must be a numeric constant")
             elif dtype == float:
                 arg = node.args[i]
-                if not isinstance(arg, Const) or not isinstance(arg.value, (float)):
+                if not isinstance(arg, Const) or not isinstance(arg.value, (float, int)):
                     raise ValidationError(f"{i}-th argument of '{node.fn}' must be a numeric constant")
             elif dtype == str:
                 arg = node.args[i]

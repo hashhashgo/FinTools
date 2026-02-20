@@ -179,6 +179,7 @@ def make_dataset(*, drop_days: int = 365, only_SHSZ: bool = True, **kwargs) -> p
     df = df.filter(
         pl.col('date') > pl.col('date').min().over('symbol') + timedelta(days=drop_days)
     )
+    df = df.with_columns(pl.col('industry').cast(pl.Categorical))
     if only_SHSZ:
         df = df.filter(
             pl.col('symbol').str.starts_with("6") | pl.col('symbol').str.starts_with("0") | pl.col('symbol').str.starts_with("3")
