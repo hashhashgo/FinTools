@@ -217,6 +217,7 @@ class QuantEngine:
                     for fid in sorted(self.alpha_pool):
                         assert fid in self._all_alphas, f"fid {fid} not found in _all_alphas"
                         f.write(self._all_alphas.get(fid, fid) + '\n')
+            self._write_alpha_cache()
         
         return good_fids, pool, drop_fids
 
@@ -246,7 +247,7 @@ class QuantEngine:
             if fid not in self._all_alphas:
                 raise ValueError(f"Alpha with fid {fid} not found")
             if fid not in cols:
-                raise RuntimeError(f"Alpha should be computed but not found in alpha dataframe. fid: {fid}")
+                self.add([self._all_alphas.get(fid, fid)])
 
         # 防止新因子里有跟pool重复（会导致列重复）
         pool_only = [f for f in sorted(pool) if f not in set(new_fids)]
@@ -434,6 +435,16 @@ class QuantEngine:
             self._alpha_records.write_parquet(self.alpha_records_cache)
         return self._alpha_records.filter(pl.col('fid').is_in(alphas))
 
+    def _write_alpha_cache(self):
+        self.add([self._all_alphas.get(aid, aid) for aid in self.alpha_pool])
+        self.alpha()
+        if self.raw_values_cache is not None:
+            self.raw_values_cache.parent.mkdir(parents=True, exist_ok=True)
+            self._raw_alpha.select('date', 'symbol', *self.alpha_pool).write_parquet(self.raw_values_cache)
+        if self.norm_alpha_cache is not None:
+            self.norm_alpha_cache.parent.mkdir(parents=True, exist_ok=True)
+            self._norm_alpha.select('date', 'symbol', *self.alpha_pool).write_parquet(self.norm_alpha_cache)
+
     def alpha(self, max_parallel: int | None = None) -> pl.DataFrame:
         raw_alpha = self.raw_alpha(max_parallel=max_parallel)
         all_cols = set(raw_alpha.columns) - {'date', 'symbol'}
@@ -441,9 +452,6 @@ class QuantEngine:
         if len(calc_cols) == 0: return self._norm_alpha
         res = self.normalize_alpha(raw_alpha.lazy(), cols=list(calc_cols))
         self._norm_alpha = pl.concat([self._norm_alpha.lazy(), res.select(list(calc_cols))], how='horizontal', parallel=True).collect()
-        if self.norm_alpha_cache is not None:
-            self.norm_alpha_cache.parent.mkdir(parents=True, exist_ok=True)
-            self._norm_alpha.select('date', 'symbol', *self.alpha_pool).write_parquet(self.norm_alpha_cache)
         return self._norm_alpha
     
     def raw_alpha(self, max_parallel: int | None = None) -> pl.DataFrame:
@@ -453,12 +461,9 @@ class QuantEngine:
             self._raw_alpha = pl.concat([self._raw_alpha.lazy(), *self._lazy_res_cols[i:i+max_parallel]], how='horizontal', parallel=True).collect()
         self._lazy_res_cols = []
         self._lazy_res_cols_fids = set()
-        if self.raw_values_cache is not None:
-            self.raw_values_cache.parent.mkdir(parents=True, exist_ok=True)
-            self._raw_alpha.select('date', 'symbol', *self.alpha_pool).write_parquet(self.raw_values_cache)
         return self._raw_alpha
 
-    def add(self, expressions: List[str] | str) -> List[str]:
+    def add(self, expressions: Iterable[str] | str) -> List[str]:
         fids = []
         if isinstance(expressions, str): expressions = [expressions]
         for expr in expressions:
