@@ -183,7 +183,7 @@ TS_FUNC = []
 CS_FUNC = []
 GROUP_FUNC = []
 
-def full_doc() -> str:
+def full_doc(include_details: bool = False) -> str:
     doc = \
 f"""Quant Platform Documentation
 Fields: {', '.join(DATA_SCHEMA.keys())}
@@ -202,10 +202,12 @@ DSL:
 """
     Grouping:
 """ + '\n'.join(['      - ' + OPS[name].hint_func_sig for name in GROUP_FUNC]) + \
+((
 """
 
 Function Details:
 """ + '\n'.join([func_doc(name) for name in OPS])
+) if include_details else "")
     return doc
 
 
