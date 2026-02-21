@@ -114,17 +114,19 @@ class QuantEngine:
         self._raw_alpha = self._raw_alpha.select(['date', 'symbol', *self.alpha_pool]).rechunk()
         self._alpha_records = self._alpha_records.rechunk()
     
-    def __timerange__(self, on: Literal['train', 'val', 'test']) -> tuple[date, date]:
+    def __timerange__(self, on: Literal['train', 'val', 'test', 'all']) -> tuple[date, date]:
         if on == 'train':
             return (self.train_start, self.val_start)
         elif on == 'val':
             return (self.val_start, self.test_start)
         elif on == 'test':
             return (self.test_start, self.dataset.select(pl.col('date').max()).item())
+        elif on == 'all':
+            return (self.train_start, self.dataset.select(pl.col('date').max()).item())
         else:
             raise ValueError(f"Invalid on value: {on}")
     
-    def __timerange_expr__(self, on: Literal['train', 'val', 'test']) -> pl.Expr:
+    def __timerange_expr__(self, on: Literal['train', 'val', 'test', 'all']) -> pl.Expr:
         start, end = self.__timerange__(on)
         return (pl.col('date') >= start) & (pl.col('date') < end)
 
@@ -136,7 +138,7 @@ class QuantEngine:
         relevance_same_threshold: float = 0.8,
         top_k: int = 5,
         pool: Set[str] | None = None,
-        on: Literal["train", "val", "test"] = "train",
+        on: Literal["train", "val", "test", "all"] = "train",
         date_equal_weight: bool = True,   # True: 每个date等权平均；False: 按有效样本数加权
     ) -> Tuple[Set[str], Set[str], Set[str]]:
         """
@@ -226,7 +228,7 @@ class QuantEngine:
         new_fids: Iterable[str] | str,
         *,
         pool: Set[str] | None = None,
-        on: Literal["train", "val", "test"] = "train",
+        on: Literal["train", "val", "test", "all"] = "train",
         date_equal_weight: bool = True,   # True: 每个date等权平均；False: 按有效样本数加权
     ) -> pl.DataFrame:
         if pool is None:
@@ -541,7 +543,8 @@ class QuantEngine:
             *,
             rebalance_period: int = 7,
             pct_ranges: List[Tuple[float, float]] = [(0.8, 1.0)],
-            rebalance_delay: int = 1
+            rebalance_delay: int = 1,
+            on: Literal['train', 'val', 'test', 'all'] = 'all',
         ):
         if fid not in self._all_alphas: raise ValueError(f"Alpha with fid {fid} not found")
         if fid not in self.alpha().columns: raise RuntimeError(f"Alpha shoud be computed, but not found in alpha dataframe. fid: {fid}")
@@ -552,7 +555,7 @@ class QuantEngine:
                 self.alpha().lazy().select(['date', 'symbol', fid]),
                 on=['date', 'symbol'],
                 how='inner'
-            ).with_columns(
+            ).filter(self.__timerange_expr__(on=on)).with_columns(
                 (pl.col('date').cast(INTEGER) / rebalance_period).floor().cast(INTEGER).alias('period')
             ).sort('date').with_columns(
                 ((pl.col(fid).rank(method = 'max') - 1) / (pl.len() - 1)).over('date').alias('rank'),
@@ -573,7 +576,7 @@ class QuantEngine:
             ).sort('date').with_columns(
                 ((pl.col('alpha_daily_return') + 1).cum_prod() - 1).alias('alpha_cumulative_return')
             )
-            df_baseline = self.dataset.lazy().group_by('date').agg(
+            df_baseline = self.dataset.lazy().filter(self.__timerange_expr__(on=on)).group_by('date').agg(
                 (pl.col('returns')).mean().alias('baseline_daily_return')
             ).sort('date').with_columns(
                 ((pl.col('baseline_daily_return') + 1).cum_prod() - 1).alias('baseline_cumulative_return')
