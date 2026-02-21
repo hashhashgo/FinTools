@@ -433,7 +433,7 @@ class QuantEngine:
         if self.alpha_records_cache is not None:
             self.alpha_records_cache.parent.mkdir(parents=True, exist_ok=True)
             self._alpha_records.write_parquet(self.alpha_records_cache)
-        return self._alpha_records.filter(pl.col('fid').is_in(alphas))
+        return self._alpha_records.filter(pl.col('fid').is_in(alphas) & (pl.col('horizon') == horizon) & (pl.col('on') == on))
 
     def _write_alpha_cache(self):
         self.add([self._all_alphas.get(aid, aid) for aid in self.alpha_pool])
