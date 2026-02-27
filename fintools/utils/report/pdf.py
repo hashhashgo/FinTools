@@ -1,4 +1,4 @@
-from typing import Sequence, cast
+from typing import cast, Sequence
 from pathlib import Path
 import pandas as pd
 from datetime import datetime
@@ -21,12 +21,13 @@ from .base import ReportBase, Renderer
 from .types import FlowGraph, Heading, Paragraph, Table, TableRow, Image, Text, ChartInline
 
 from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 
 import graphviz
 
 
-def _plot_by_type(ax, chart_type: str, x: Sequence, y: Sequence, label: str | None = None) -> None:
+def _plot_by_type(ax: Axes, chart_type: str, x: Sequence, y: Sequence, label: str | None = None) -> None:
     if chart_type == "line":
         ax.plot(x, y, label=label)
     elif chart_type == "bar":
@@ -70,7 +71,7 @@ def chart_to_matplotlib_figure(chart: ChartInline, width: float, height: float, 
         is_legend = True
     else:
         for col in ys:
-            _plot_by_type(ax, spec.chart_type, df[x], cast(Sequence, df[col]), label=col)
+            _plot_by_type(ax, spec.chart_type, cast(Sequence, df[x]), cast(Sequence, df[col]), label=col)
         if len(ys) > 1:
             is_legend = True
     
