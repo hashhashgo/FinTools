@@ -61,27 +61,34 @@ def chart_to_matplotlib_figure(chart: ChartInline, width: float, height: float, 
     try: df[x] = pd.to_datetime(df[x], format="%Y-%m-%dT%H:%M:%S")
     except Exception: pass
 
-    is_legend = False
+    legends = 0
     if series:
         # 按 series 分组，每组画 ys
         for key, g in df.groupby(series):
             for col in ys:
                 label = f"{key}:{col}" if len(ys) > 1 else str(key)
                 _plot_by_type(ax, spec.chart_type, g[x], g[col], label=label)
-        is_legend = True
+                legends += 1
     else:
         for col in ys:
             _plot_by_type(ax, spec.chart_type, cast(Sequence, df[x]), cast(Sequence, df[col]), label=col)
-        if len(ys) > 1:
-            is_legend = True
+            legends += 1
     
     if options:
         if "xlabel" in options:
             ax.set_xlabel(options["xlabel"])
         if "ylabel" in options:
             ax.set_ylabel(options["ylabel"])
-        if options.get("legend", False) and is_legend:
-            ax.legend()
+        if options.get("legend", False) and legends:
+            if legends > 4:
+                ax.legend(
+                    loc = "upper center",
+                    bbox_to_anchor = (0.5, -0.1),
+                    ncol = 4,
+                    frameon = False,
+                )
+            else:
+                ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
 
     if spec.title:
         ax.set_title(spec.title)
