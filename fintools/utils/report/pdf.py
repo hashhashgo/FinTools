@@ -95,7 +95,7 @@ def chart_to_matplotlib_figure(chart: ChartInline, width: float, height: float, 
                     frameon = False,
                 )
             else:
-                ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
+                ax.legend(loc="upper left", bbox_to_anchor=(0, 1))
     
     fig.tight_layout()
 
