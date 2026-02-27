@@ -73,6 +73,9 @@ def chart_to_matplotlib_figure(chart: ChartInline, width: float, height: float, 
         for col in ys:
             _plot_by_type(ax, spec.chart_type, cast(Sequence, df[x]), cast(Sequence, df[col]), label=col)
             legends += 1
+
+    if spec.title:
+        ax.set_title(spec.title)
     
     if options:
         if "xlabel" in options:
@@ -81,17 +84,18 @@ def chart_to_matplotlib_figure(chart: ChartInline, width: float, height: float, 
             ax.set_ylabel(options["ylabel"])
         if options.get("legend", False) and legends:
             if legends > 4:
+                fig.canvas.draw()
+                xlabel_bbox = ax.xaxis.get_label().get_window_extent()
+                inv = ax.transAxes.inverted()
+                xlabel_bbox = inv.transform(xlabel_bbox)
                 ax.legend(
                     loc = "upper center",
-                    bbox_to_anchor = (0.5, -0.1),
+                    bbox_to_anchor = (0.5, xlabel_bbox[0][1] - 0.05),
                     ncol = 4,
                     frameon = False,
                 )
             else:
                 ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
-
-    if spec.title:
-        ax.set_title(spec.title)
     
     fig.tight_layout()
 
