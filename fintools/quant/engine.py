@@ -641,4 +641,4 @@ class QuantEngine:
                 compiled_expr = compiled.expr.over(compiled.over.value)
         else:
             compiled_expr = pl.lit(compiled)
-        return df.select(compiled_expr.cast(REAL).alias(alias))
+        return df.with_columns(compiled_expr.cast(REAL).alias(alias)).select(alias)
