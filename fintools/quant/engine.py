@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal, Set, Iterable, Tuple, cast, IO
+from typing import Dict, List, Literal, Set, Iterable, Tuple, cast, IO, Callable
 import polars as pl
 import numpy as np
 from .parser import Parser, Node
@@ -22,6 +22,7 @@ class QuantEngine:
     def __init__(
         self,
         *,
+        dataset: pl.DataFrame | Callable[..., pl.DataFrame] = lambda fetch_new: make_dataset(fetch_new=fetch_new),
         start_date: date = date(2014, 1, 1),
         val_start: date = date(2022, 1, 1),
         test_start: date = date(2024, 1, 1),
@@ -33,7 +34,10 @@ class QuantEngine:
         raw_values_cache: Path | None = Path("./results/raw_alpha_values.parquet"),
         fetch_new_data: bool = False,
     ):
-        self.dataset = make_dataset(fetch_new=fetch_new_data).filter(pl.col('date') >= start_date)
+        if isinstance(dataset, pl.DataFrame):
+            self.dataset = dataset.filter(pl.col('date') >= start_date)
+        elif callable(dataset):
+            self.dataset = dataset(fetch_new=fetch_new_data).filter(pl.col('date') >= start_date)
         self.train_start = start_date
         self.val_start = val_start
         self.test_start = test_start
