@@ -27,11 +27,11 @@ class QuantEngine:
         val_start: date = date(2022, 1, 1),
         test_start: date = date(2024, 1, 1),
         init_alphas: Iterable[str] | str | PathLike[str] | IO[str] | None = None,
-        alphas_cache: Path | None = Path("./results/alphas.json"),
-        alpha_pool_cache: Path | None = Path("./results/alpha_pool.txt"),
-        alpha_records_cache: Path | None = Path("./results/alpha_records.parquet"),
-        norm_alpha_cache: Path | None = Path("./results/alpha_cache.parquet"),
-        raw_values_cache: Path | None = Path("./results/raw_alpha_values.parquet"),
+        alphas_cache: Path | None = None, # Path("./results/alphas.json"),
+        alpha_pool_cache: Path | None = None, # Path("./results/alpha_pool.txt"),
+        alpha_records_cache: Path | None = None, # Path("./results/alpha_records.parquet"),
+        norm_alpha_cache: Path | None = None, # Path("./results/alpha_cache.parquet"),
+        raw_values_cache: Path | None = None, # Path("./results/raw_alpha_values.parquet"),
         fetch_new_data: bool = False,
     ):
         if isinstance(dataset, pl.DataFrame):
