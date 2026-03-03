@@ -34,7 +34,7 @@ def _require_int_const(node: Node, what: str) -> int:
         raise ValidationError(f"{what} must be an integer constant")
     return int(v)
 
-def validate(node: Node, depth = 0, allow_float_for_int=False) -> int:
+def validate(node: Node, depth = 0, allow_float_for_int = False, fields: set = set(DATA_SCHEMA.keys())) -> int:
     total_nodes = 1
     if depth > MAX_DEPTH:
         raise ValidationError(f"Expression is too deep: {depth} (max {MAX_DEPTH})")
@@ -68,7 +68,7 @@ def validate(node: Node, depth = 0, allow_float_for_int=False) -> int:
             else:
                 raise ValidationError(f"Unsupported field type in operator spec: {dtype}")
     elif isinstance(node, Field):
-        if node.name not in DATA_SCHEMA:
+        if node.name not in fields:
             raise ValidationError(f"Unknown field: {node.name}")
     elif isinstance(node, Const):
         pass
