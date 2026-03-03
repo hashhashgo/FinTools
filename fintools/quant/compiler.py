@@ -4,7 +4,7 @@ from typing import Dict, Optional, Tuple, List
 
 from .AST import Node, Field, Const, Call
 from .validate import ast_to_hash
-from .registry import OPS, Schedule, AnyConstant, GroupBy, ScheduleColume, DATA_SCHEMA
+from .registry import OPS, Schedule, AnyConstant, GroupBy, ScheduleColume
 
 class CompileError(Exception): pass
 
@@ -24,8 +24,6 @@ def compile_expr(df: pl.LazyFrame, node: Node, *, extra_columns: Optional[Dict[s
     if isinstance(node, Const):
         return df, node.value
     elif isinstance(node, Field):
-        if node.name not in DATA_SCHEMA:
-            raise CompileError(f"Unknown field: {node.name}")
         result = Schedule(
             expr = pl.col(node.name),
             aid = key,

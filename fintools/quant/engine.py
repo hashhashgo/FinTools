@@ -33,11 +33,13 @@ class QuantEngine:
         norm_alpha_cache: Path | None = None, # Path("./results/alpha_cache.parquet"),
         raw_values_cache: Path | None = None, # Path("./results/raw_alpha_values.parquet"),
         fetch_new_data: bool = False,
+        validate_expressions: bool = True,
     ):
         if isinstance(dataset, pl.DataFrame):
             self.dataset = dataset.filter(pl.col('date') >= start_date)
         elif callable(dataset):
             self.dataset = dataset(fetch_new=fetch_new_data).filter(pl.col('date') >= start_date)
+        self.validate_expressions = validate_expressions
         self.train_start = start_date
         self.val_start = val_start
         self.test_start = test_start
@@ -478,7 +480,7 @@ class QuantEngine:
             lazy_df = self.dataset.lazy()
             ast = Parser(expression=expr).parse()
             ast = normalize(ast)
-            validate(ast)
+            if self.validate_expressions: validate(ast)
             aid = ast_to_hash(ast)
             fids.append(aid)
             self._all_alphas[aid] = ast_to_expression(ast)
