@@ -44,7 +44,7 @@ def validate(node: Node, depth = 0, allow_float_for_int = False, fields: set = s
             if i >= len(node.args):
                 break
             if dtype == object:
-                t = validate(node.args[i], depth + 1)
+                t = validate(node.args[i], depth + 1, allow_float_for_int=allow_float_for_int, fields=fields)
                 total_nodes += t
                 if total_nodes > MAX_NODES:
                     raise ValidationError(f"Expression has too many nodes: {total_nodes} (max {MAX_NODES})")
