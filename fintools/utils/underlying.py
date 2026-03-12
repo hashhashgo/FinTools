@@ -151,7 +151,7 @@ def symbol_search_all(
     global _nanhua_codes, _nanhua_category
     try:
         if _nanhua_codes is None or _nanhua_codes.empty:
-            nanhua_server_url = os.getenv("NANHUA_SERVER_URL", "http://localhost:13200/")
+            nanhua_server_url = os.getenv("NANHUA_SERVER_URL", "http://127.0.0.1:13200/")
             if not nanhua_server_url.endswith("/"):
                 nanhua_server_url = nanhua_server_url + '/'
             all_info = requests.get(nanhua_server_url + "contracts", timeout=0.5).json()

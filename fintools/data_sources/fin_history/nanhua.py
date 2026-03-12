@@ -32,7 +32,7 @@ class NanHuaDataSource(OHLCDataSource):
         'T_NH': 'CBA04501.CS',
     }
 
-    def __init__(self, data_server_url: str = os.getenv("NANHUA_SERVER_URL", "http://localhost:13200/")):
+    def __init__(self, data_server_url: str = os.getenv("NANHUA_SERVER_URL", "http://127.0.0.1:13200/")):
         if not data_server_url.endswith('/'):
             data_server_url += '/'
         self.data_server_url = data_server_url
