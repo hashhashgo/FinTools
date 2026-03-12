@@ -17,63 +17,29 @@ from .types import parse_datetime
 
 from ..runtime.data_sources.tushare import pro
 
-_index_basic = None
-def index_basic() -> pd.DataFrame:
-    """
-    Get basic information of all indexes.
-
-    Returns:
-    A DataFrame containing index basic information.
-    """
-    global _index_basic
-    if _index_basic is not None:
-        return _index_basic
-    df = None
+_fetch_cache: Dict[str, pd.DataFrame] = {}
+def fetch_with_offsets(func_name) -> pd.DataFrame:
+    global _fetch_cache
+    if func_name in _fetch_cache:
+        return _fetch_cache[func_name]
     df_list = []
     offset = 0
     while True:
-        df = pro.index_basic(offset=offset)
+        df = eval(f"pro.{func_name}")(offset=offset)
         if df.empty:
             break
         df_list.append(df)
         offset += len(df)
-    _index_basic = pd.concat(df_list, ignore_index=True)
-    return _index_basic
-_stock_basic = None
-def stock_basic() -> pd.DataFrame:
-    """
-    Get basic information of all stocks.
+    result = pd.concat(df_list, ignore_index=True)
+    _fetch_cache[func_name] = result
+    return result
 
-    Returns:
-    A DataFrame containing stock basic information.
-    """
-    global _stock_basic
-    if _stock_basic is not None:
-        return _stock_basic
-    df = None
-    df = pro.stock_basic(list_status='L')
-    if df is None or not isinstance(df, pd.DataFrame):
-        raise RuntimeError("Failed to fetch stock basic information from Tushare.")
-    _stock_basic = df
-    return df
+index_basic = lambda: fetch_with_offsets("index_basic")
+stock_basic = lambda: fetch_with_offsets("stock_basic")
+us_basic = lambda: fetch_with_offsets("us_basic")
+hk_basic = lambda: fetch_with_offsets("hk_basic")
+fx_obasic = lambda: fetch_with_offsets("fx_obasic")
 
-_fx_obasic = None
-def fx_obasic() -> pd.DataFrame:
-    """
-    Get basic information of all foreign exchange rates.
-
-    Returns:
-    A DataFrame containing foreign exchange basic information.
-    """
-    global _fx_obasic
-    if _fx_obasic is not None:
-        return _fx_obasic
-    df = None
-    df = pro.fx_obasic()
-    if df is None or not isinstance(df, pd.DataFrame):
-        raise RuntimeError("Failed to fetch foreign exchange basic information from Tushare.")
-    _fx_obasic = df
-    return df
 
 global_index_map = {
     'XIN9': '富时中国A50指数',
@@ -121,25 +87,21 @@ def symbol_search_all(
     
     ret: List[SYMBOL_SEARCH_RESULT] = []
     # Try to search in stocks
-    if keyword and keyword in stock_basic()['symbol'].values:
+    if keyword in stock_basic()['symbol'].values:
         res = stock_basic()[stock_basic()['symbol'] == keyword].iloc[0]
         ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
-    elif keyword and keyword in stock_basic()['ts_code'].values:
+    elif keyword in stock_basic()['ts_code'].values:
         res = stock_basic()[stock_basic()['ts_code'] == keyword].iloc[0]
         ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
-    elif keyword and keyword in stock_basic()['name'].values:
+    elif keyword in stock_basic()['name'].values:
         res = stock_basic()[stock_basic()['name'] == keyword].iloc[0]
         ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': keyword, 'source': 'tushare'})
-    else:
-        res_df = pro.stock_basic(ts_code=keyword)
-        assert isinstance(res_df, pd.DataFrame)
-        if res_df.empty: res_df = pro.stock_basic(name=keyword)
-        assert isinstance(res_df, pd.DataFrame)
-        if not res_df.empty:
-            res = res_df.iloc[0]
-            ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
-            global _stock_basic
-            _stock_basic = pd.concat([stock_basic(), res_df], ignore_index=True)
+    elif keyword in us_basic()['ts_code'].values:
+        res = us_basic()[us_basic()['ts_code'] == keyword].iloc[0]
+        ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
+    elif keyword in hk_basic()['ts_code'].values:
+        res = hk_basic()[hk_basic()['ts_code'] == keyword].iloc[0]
+        ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
     
     # Try to search in indexes
     from fintools.data_sources.fin_history.tushare import TushareDataSource
@@ -158,16 +120,6 @@ def symbol_search_all(
     elif keyword and keyword in index_basic()['name'].values:
         res = index_basic()[index_basic()['name'] == keyword].iloc[0]
         ret.append({'type': 'index', 'symbol': res['ts_code'], 'name': keyword, 'source': 'tushare'})
-    else:
-        res_df = pro.index_basic(ts_code=keyword)
-        assert isinstance(res_df, pd.DataFrame)
-        if res_df.empty: res_df = pro.index_basic(name=keyword)
-        assert isinstance(res_df, pd.DataFrame)
-        if not res_df.empty:
-            res = res_df.iloc[0]
-            ret.append({'type': 'index', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
-            global _index_basic
-            _index_basic = pd.concat([index_basic(), res_df], ignore_index=True)
 
     if keyword in fx_obasic()['ts_code'].values:
         res = fx_obasic()[fx_obasic()['ts_code'] == keyword].iloc[0]

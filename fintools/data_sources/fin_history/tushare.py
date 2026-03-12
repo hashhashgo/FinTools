@@ -8,6 +8,7 @@ from importlib.resources import files
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ...runtime.data_sources.tushare import pro
+from ...utils.underlying import stock_basic, us_basic, hk_basic
 
 class TushareDataSource(OHLCDataSource):
 
@@ -73,18 +74,35 @@ class TushareDataSource(OHLCDataSource):
         ts_freq = self._map_frequency(freq)
         start_date = self._parse_datetime(start).strftime("%Y%m%d")
         end_date = self._parse_datetime(end).strftime("%Y%m%d")
-        if ts_freq == "daily":
-            df = pro.daily(ts_code=symbol, start_date=start_date, end_date=end_date)
-        elif ts_freq == "weekly":
-            df = pro.weekly(ts_code=symbol, start_date=start_date, end_date=end_date)
-        elif ts_freq == "monthly":
-            df = pro.monthly(ts_code=symbol, start_date=start_date, end_date=end_date)
-        elif ts_freq in ['1min', '5min', '15min', '30min', '60min']:
-            start_date = self._parse_datetime(start).strftime("%Y-%m-%d %H:%M:%S")
-            end_date = self._parse_datetime(end).strftime("%Y-%m-%d %H:%M:%S")
-            df = pro.stk_mins(ts_code=symbol, freq=self._map_frequency(freq), start_date=start_date, end_date=end_date)
+        if symbol in stock_basic()['ts_code'].values:
+            if ts_freq == "daily":
+                df = pro.daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            elif ts_freq == "weekly":
+                df = pro.weekly(ts_code=symbol, start_date=start_date, end_date=end_date)
+            elif ts_freq == "monthly":
+                df = pro.monthly(ts_code=symbol, start_date=start_date, end_date=end_date)
+            elif ts_freq in ['1min', '5min', '15min', '30min', '60min']:
+                start_date = self._parse_datetime(start).strftime("%Y-%m-%d %H:%M:%S")
+                end_date = self._parse_datetime(end).strftime("%Y-%m-%d %H:%M:%S")
+                df = pro.stk_mins(ts_code=symbol, freq=ts_freq, start_date=start_date, end_date=end_date)
+            else:
+                raise NotImplementedError(f"Frequency {freq} not supported for stock data in Tushare")
+        elif symbol in us_basic()['ts_code'].values:
+            if ts_freq == "daily":
+                df = pro.us_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            else:
+                raise NotImplementedError(f"Frequency {freq} not supported for US stock data in Tushare")
+        elif symbol in hk_basic()['ts_code'].values:
+            if ts_freq == "daily":
+                df = pro.hk_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
+            elif ts_freq in ['1min', '5min', '15min', '30min', '60min']:
+                start_date = self._parse_datetime(start).strftime("%Y-%m-%d %H:%M:%S")
+                end_date = self._parse_datetime(end).strftime("%Y-%m-%d %H:%M:%S")
+                df = pro.hk_mins(ts_code=symbol, freq=ts_freq, start_date=start_date, end_date=end_date)
+            else:
+                raise NotImplementedError(f"Frequency {freq} not supported for HK stock data in Tushare")
         else:
-            raise NotImplementedError(f"Frequency {freq} not supported for stock data in Tushare")
+            raise ValueError(f"Symbol {symbol} not found in stock basic data")
         df['trade_date'] = pd.to_datetime(df['trade_date']).dt.tz_localize('Asia/Shanghai')
         return df
 
