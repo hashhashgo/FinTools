@@ -46,7 +46,6 @@ def send_email_with_attachment(
             filename=attachment_path.name
         )
 
-    with smtplib.SMTP(smtp_server, smtp_port) as server:
-        server.starttls()
+    with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
         server.login(smtp_user, smtp_password)
         server.send_message(msg)
