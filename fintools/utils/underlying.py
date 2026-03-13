@@ -102,6 +102,16 @@ def symbol_search_all(
     elif keyword in hk_basic()['ts_code'].values:
         res = hk_basic()[hk_basic()['ts_code'] == keyword].iloc[0]
         ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
+    else:
+        res_df = pro.stock_basic(ts_code=keyword)
+        assert isinstance(res_df, pd.DataFrame)
+        if res_df.empty: res_df = pro.stock_basic(name=keyword)
+        assert isinstance(res_df, pd.DataFrame)
+        if not res_df.empty:
+            res = res_df.iloc[0]
+            ret.append({'type': 'stock', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
+            global _stock_basic
+            _stock_basic = pd.concat([stock_basic(), res_df], ignore_index=True)
     
     # Try to search in indexes
     from fintools.data_sources.fin_history.tushare import TushareDataSource
@@ -120,6 +130,16 @@ def symbol_search_all(
     elif keyword and keyword in index_basic()['name'].values:
         res = index_basic()[index_basic()['name'] == keyword].iloc[0]
         ret.append({'type': 'index', 'symbol': res['ts_code'], 'name': keyword, 'source': 'tushare'})
+    else:
+        res_df = pro.index_basic(ts_code=keyword)
+        assert isinstance(res_df, pd.DataFrame)
+        if res_df.empty: res_df = pro.index_basic(name=keyword)
+        assert isinstance(res_df, pd.DataFrame)
+        if not res_df.empty:
+            res = res_df.iloc[0]
+            ret.append({'type': 'index', 'symbol': res['ts_code'], 'name': res['name'], 'source': 'tushare'})
+            global _index_basic
+            _index_basic = pd.concat([index_basic(), res_df], ignore_index=True)
 
     if keyword in fx_obasic()['ts_code'].values:
         res = fx_obasic()[fx_obasic()['ts_code'] == keyword].iloc[0]
