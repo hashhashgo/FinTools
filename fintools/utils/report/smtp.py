@@ -9,8 +9,10 @@ def send_email_with_attachment(
     to_emails: list[str],
     subject: str,
     body: str,
-    attachment_path: Path,
     sender_name: str,
+    attachment_path: Path | list[Path] = [],
+    cc_emails: list[str] = [],
+    bcc_emails: list[str] = [],
     smtp_server: str = os.getenv("SMTP_SERVER", ""),
     smtp_port: int = int(os.getenv("SMTP_PORT", 0)),
     smtp_user: str = os.getenv("SMTP_USER", ""),
@@ -35,17 +37,20 @@ def send_email_with_attachment(
     msg = EmailMessage()
     msg["From"] = formataddr((sender_name, smtp_user))
     msg["To"] = ", ".join(to_emails)
+    msg["Cc"] = ", ".join(cc_emails)
     msg["Subject"] = subject
     msg.set_content(body, charset="utf-8")
 
-    with open(attachment_path, "rb") as f:
-        msg.add_attachment(
-            f.read(),
-            maintype="application",
-            subtype=attachment_path.suffix.lstrip("."),
-            filename=attachment_path.name
+    if isinstance(attachment_path, Path): attachment_path = [attachment_path]
+    for path in attachment_path:
+        with open(path, "rb") as f:
+            msg.add_attachment(
+                f.read(),
+                maintype="application",
+                subtype=path.suffix.lstrip("."),
+                filename=path.name
         )
 
     with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
         server.login(smtp_user, smtp_password)
-        server.send_message(msg)
+        server.send_message(msg, to_addrs=to_emails + cc_emails + bcc_emails)
