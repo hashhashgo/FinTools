@@ -149,20 +149,18 @@ class TushareDataSource(OHLCDataSource):
         end_date = self._parse_datetime(end).strftime("%Y%m%d")
         if ts_freq == "daily":
             df = pro.fut_daily(ts_code=symbol, start_date=start_date, end_date=end_date)
-            return df
         elif ts_freq == "weekly":
             df = pro.fut_weekly_monthly(ts_code=symbol, start_date=start_date, end_date=end_date, freq="week")
-            return df
         elif ts_freq == "monthly":
             df = pro.fut_weekly_monthly(ts_code=symbol, start_date=start_date, end_date=end_date, freq="month")
-            return df
         elif ts_freq in ['1min', '5min', '15min', '30min', '60min']:
             start_date = self._parse_datetime(start).strftime("%Y-%m-%d %H:%M:%S")
             end_date = self._parse_datetime(end).strftime("%Y-%m-%d %H:%M:%S")
             df = pro.fut_mins(ts_code=symbol, freq=self._map_frequency(freq), start_date=start_date, end_date=end_date)
-            return df
         else:
             raise NotImplementedError(f"Frequency {freq} not supported for commodity data in Tushare")
+        df['trade_date'] = pd.to_datetime(df['trade_date']).dt.tz_localize('Asia/Shanghai')
+        return df
     
     def _history_etf(self, symbol: str, start: Union[str, datetime, date, int], end: Union[str, datetime, date, int], freq: DataFrequency) -> pd.DataFrame:
         ts_freq = self._map_frequency(freq)
